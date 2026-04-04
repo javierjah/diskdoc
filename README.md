@@ -66,7 +66,9 @@ Everything `diskdoc` targets is either a cache, build artifact, or regenerable d
 2. Dynamically scans `~/Library/Caches/*` for anything over 50MB
 3. Finds `node_modules` across your code directories
 4. Presents a sorted, color-coded table
-5. Asks for confirmation (unless `--auto`)
+5. Interactive selector — pick exactly what to delete with arrow keys and space
+   - `↑↓` navigate, `space` toggle, `a` all, `n` none, `enter` confirm, `q` cancel
+   - `--auto` skips selection and cleans everything
 6. Cleans everything and shows before/after stats
 
 ## Origin Story
