@@ -7,13 +7,20 @@
 # cleans everything, and shows a detailed report.
 #
 # Usage:
-#   diskdoc           Interactive mode (asks before deleting)
-#   diskdoc --auto    Automatic mode (no confirmation)
-#   diskdoc --scan    Scan only, don't delete anything
+#   diskdoc                    Interactive mode (asks before deleting)
+#   diskdoc --auto             Automatic mode (no confirmation)
+#   diskdoc --scan             Scan only, don't delete anything
+#   diskdoc --dry-run          Show what would be deleted (with commands)
+#   diskdoc --json             Output scan results as JSON
+#   diskdoc --min-size N       Minimum size in MB to show (default: 50)
+#   diskdoc --profile PROFILE  Filter: all, dev, system, apps
+#   diskdoc --no-color         Disable colored output
+#   diskdoc doctor             Diagnose disk usage (top consumers)
+#   diskdoc history            Show cleanup history
 # ============================================================================
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="2.0.0"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -21,68 +28,158 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
+BLUE='\033[0;34m'
 BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
+disable_colors() {
+  RED='' GREEN='' YELLOW='' CYAN='' MAGENTA='' BLUE='' BOLD='' DIM='' NC=''
+}
+
 # Disable colors if not a terminal
-if [[ ! -t 1 ]]; then
-  RED='' GREEN='' YELLOW='' CYAN='' MAGENTA='' BOLD='' DIM='' NC=''
-fi
+[[ ! -t 1 ]] && disable_colors
 
 # ── Flags ────────────────────────────────────────────────────────────────────
 AUTO_MODE=false
 SCAN_ONLY=false
+DRY_RUN=false
+JSON_MODE=false
+MIN_SIZE_MB=50
+PROFILE="all"
+DOCTOR_MODE=false
+SHOW_HISTORY=false
 
-for arg in "$@"; do
-  case "$arg" in
-    --auto)    AUTO_MODE=true ;;
-    --scan)    SCAN_ONLY=true ;;
-    --version|-v)
-      echo "diskdoc $VERSION"
-      exit 0
-      ;;
-    --help|-h)
-      cat <<'HELP'
+show_help() {
+  cat <<'HELP'
 diskdoc — macOS Disk Cleanup CLI
 
 Usage:
-  diskdoc              Interactive (scan, confirm, clean)
-  diskdoc --scan       Scan only, show what can be cleaned
-  diskdoc --auto       Clean without asking for confirmation
-  diskdoc --version    Show version
-  diskdoc --help       Show this help
+  diskdoc                    Interactive (scan, select, clean)
+  diskdoc --scan             Scan only, show what can be cleaned
+  diskdoc --auto             Clean without asking for confirmation
+  diskdoc --dry-run          Show what would be deleted (with commands)
+  diskdoc --json             Output scan results as JSON (implies --scan)
+  diskdoc --min-size N       Minimum size in MB to include (default: 50)
+  diskdoc --profile PROFILE  Filter by profile: all, dev, system, apps
+  diskdoc --no-color         Disable colored output
+  diskdoc doctor             Diagnose disk usage (top 20 consumers)
+  diskdoc history            Show cleanup history
+  diskdoc --version          Show version
+  diskdoc --help             Show this help
+
+Profiles:
+  all      Everything (default)
+  dev      Dev tools + package managers + node_modules + Rust targets
+  system   System caches + logs + Trash
+  apps     Application data (Docker, Claude, ChatGPT, etc.)
+
+Exclusions:
+  Create ~/.diskdocrc to permanently exclude paths:
+    # One path per line
+    ~/Library/Android
+    ~/Library/Developer/Xcode/DerivedData/MyProject
 
 What it cleans:
-  - Apple screensaver cache (idleassetsd) — can grow to 100GB+
-  - Docker images, containers, and volumes
-  - Xcode DerivedData and iOS Simulators
-  - Android SDK
-  - Application caches (Spotify, Chrome, Edge, Slack, etc.)
-  - node_modules across your code directories
-  - Package manager caches (npm, pnpm, Homebrew)
-  - Trash
+  System       Trash, Apple screensaver cache, system logs, iOS backups
+  Dev Tools    Xcode DerivedData/Archives/Simulators, Android SDK, CocoaPods,
+               Gradle, Go modules, node_modules, Rust build targets
+  App Data     Docker, Claude, ChatGPT, Kiro, Windsurf, Cursor, Mail cache
+  Caches       Any ~/Library/Caches/* entry over the size threshold
+  Pkg Mgrs     npm, pnpm, yarn, pip, Homebrew
 
-All targets are safe to remove — they are caches, build artifacts,
-or regenerable data. Nothing personal is ever deleted.
+All targets are caches, build artifacts, or regenerable data.
+Nothing personal is ever deleted.
 
 More info: https://github.com/javierjah/diskdoc
 HELP
-      exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --auto)       AUTO_MODE=true ;;
+    --scan)       SCAN_ONLY=true ;;
+    --dry-run)    DRY_RUN=true; SCAN_ONLY=true ;;
+    --json)       JSON_MODE=true; SCAN_ONLY=true ;;
+    --no-color)   disable_colors ;;
+    --min-size)
+      if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
+        echo "Error: --min-size requires a value in MB"
+        exit 1
+      fi
+      MIN_SIZE_MB="$2"; shift
       ;;
+    --min-size=*) MIN_SIZE_MB="${1#*=}" ;;
+    --profile)
+      if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
+        echo "Error: --profile requires a value (all, dev, system, apps)"
+        exit 1
+      fi
+      PROFILE="$2"; shift
+      ;;
+    --profile=*)  PROFILE="${1#*=}" ;;
+    doctor)       DOCTOR_MODE=true ;;
+    history)      SHOW_HISTORY=true ;;
+    --version|-v) echo "diskdoc $VERSION"; exit 0 ;;
+    --help|-h)    show_help; exit 0 ;;
     *)
-      echo "Unknown option: $arg"
+      echo "Unknown option: $1"
       echo "Run 'diskdoc --help' for usage."
       exit 1
       ;;
   esac
+  shift
 done
+
+# Validate profile
+case "$PROFILE" in
+  all|dev|system|apps) ;;
+  *)
+    echo "Unknown profile: $PROFILE (valid: all, dev, system, apps)"
+    exit 1
+    ;;
+esac
+
+MIN_SIZE_KB=$((MIN_SIZE_MB * 1024))
 
 # ── Require macOS ────────────────────────────────────────────────────────────
 if [[ "$(uname)" != "Darwin" ]]; then
   echo "diskdoc only runs on macOS."
   exit 1
 fi
+
+# ── Exclusions (~/.diskdocrc) ────────────────────────────────────────────────
+declare -a EXCLUDES=()
+RCFILE="$HOME/.diskdocrc"
+if [[ -f "$RCFILE" ]]; then
+  while IFS= read -r line; do
+    line="${line%%#*}"            # strip inline comments
+    line="${line#"${line%%[![:space:]]*}"}"  # trim leading whitespace
+    line="${line%"${line##*[![:space:]]}"}"  # trim trailing whitespace
+    [[ -z "$line" ]] && continue
+    line="${line/#\~/$HOME}"     # expand tilde
+    EXCLUDES+=("$line")
+  done < "$RCFILE"
+fi
+
+is_excluded() {
+  local path="$1"
+  for excl in "${EXCLUDES[@]+"${EXCLUDES[@]}"}"; do
+    [[ "$path" == "$excl" || "$path" == "$excl/"* ]] && return 0
+  done
+  return 1
+}
+
+matches_profile() {
+  local cat="$1"
+  [[ "$PROFILE" == "all" ]] && return 0
+  case "$PROFILE" in
+    dev)    [[ "$cat" == "Dev Tools" || "$cat" == "Pkg Manager" ]] ;;
+    system) [[ "$cat" == "System" || "$cat" == "Cache" ]] ;;
+    apps)   [[ "$cat" == "App" ]] ;;
+    *)      return 0 ;;
+  esac
+}
 
 # ── Result arrays ────────────────────────────────────────────────────────────
 declare -a T_NAMES=()
@@ -92,8 +189,11 @@ declare -a T_CATS=()
 declare -a T_RISKS=()
 declare -a T_METHODS=()
 declare -a SELECTED=()
+FOUND_TOTAL=0
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+log() { [[ "$JSON_MODE" == true ]] && return; printf "$@"; }
 
 get_kb() {
   local p="$1"
@@ -107,7 +207,9 @@ get_kb_sudo() {
 
 fmt() {
   local kb=$1
-  if (( kb >= 1048576 )); then
+  if (( kb >= 1073741824 )); then
+    awk "BEGIN {printf \"%.1f TB\", $kb/1073741824}"
+  elif (( kb >= 1048576 )); then
     awk "BEGIN {printf \"%.1f GB\", $kb/1048576}"
   elif (( kb >= 1024 )); then
     awk "BEGIN {printf \"%.0f MB\", $kb/1024}"
@@ -116,46 +218,202 @@ fmt() {
   fi
 }
 
-add() {
-  local name="$1" path="$2" cat="$3" risk="$4" method="${5:-rm}"
-  local kb=0
+has_cmd() { command -v "$1" &>/dev/null; }
 
+# ── Scan helpers ─────────────────────────────────────────────────────────────
+
+cat_header() {
+  local name="$1" color="$2"
+  local pad=$((55 - ${#name}))
+  local line=""
+  for ((i=0; i<pad; i++)); do line+="─"; done
+  log "\n  ${color}${BOLD}┌ %s ${NC}${DIM}%s${NC}\n" "$name" "$line"
+}
+
+cat_footer() {
+  local found=$1 size=$2
+  if (( found > 0 )); then
+    log "  ${DIM}└───${NC} ${BOLD}%d found${NC} ${DIM}·${NC} ${BOLD}%s${NC}\n" "$found" "$(fmt "$size")"
+  else
+    log "  ${DIM}└─── nothing found${NC}\n"
+  fi
+}
+
+scan_target() {
+  local name="$1" path="$2" cat="$3" risk="$4" method="${5:-rm}"
+
+  matches_profile "$cat" || return 0
+  is_excluded "$path" && { log "  │  ${DIM}⊘${NC}  ${DIM}%-44s excluded${NC}\n" "$name"; return 0; }
+
+  log "\r\033[K  │  ${DIM}…${NC}  %-44s" "$name"
+
+  local kb=0
   case "$method" in
-    rm-sudo)       kb=$(get_kb_sudo "$path") ;;
-    find-nm)       kb=$(find "$path" -name "node_modules" -maxdepth 4 -type d -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END {print s+0}') ;;
-    npm-cache)     kb=$(get_kb "$HOME/.npm") ;;
-    pnpm-prune)    kb=$(get_kb "$HOME/Library/pnpm/store") ;;
-    brew-cleanup)  kb=$(get_kb "$HOME/Library/Caches/Homebrew") ;;
-    *)             kb=$(get_kb "$path") ;;
+    rm-sudo) kb=$(get_kb_sudo "$path") ;;
+    *)       kb=$(get_kb "$path") ;;
   esac
 
-  if (( kb > 51200 )); then
+  if (( kb > MIN_SIZE_KB )); then
     T_NAMES+=("$name")
     T_PATHS+=("$path")
     T_SIZES+=("$kb")
     T_CATS+=("$cat")
     T_RISKS+=("$risk")
     T_METHODS+=("$method")
+    FOUND_TOTAL=$((FOUND_TOTAL + kb))
+    log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "$name" "$(fmt "$kb")"
+    return 0
+  else
+    log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "$name"
+    return 1
   fi
 }
 
-has_cmd() { command -v "$1" &>/dev/null; }
+# ── History ──────────────────────────────────────────────────────────────────
+
+HISTORY_DIR="$HOME/.diskdoc"
+HISTORY_FILE="$HISTORY_DIR/history.log"
+
+show_history() {
+  if [[ ! -f "$HISTORY_FILE" ]]; then
+    echo ""
+    echo "  No cleanup history found."
+    echo "  Run 'diskdoc' to start cleaning."
+    echo ""
+    exit 0
+  fi
+
+  echo ""
+  printf "  ${BOLD}${CYAN}diskdoc — Cleanup History${NC}\n"
+  printf "  ${DIM}────────────────────────────────────────────────────────────────────${NC}\n"
+  printf "  ${DIM}%-20s  %14s  %8s  %8s  %6s${NC}\n" "Date" "Recovered" "Items" "Failed" "Time"
+  printf "  ${DIM}────────────────────────────────────────────────────────────────────${NC}\n"
+
+  local total_kb=0
+  local total_items=0
+  while IFS='|' read -r date recovered_kb items failed elapsed; do
+    date="${date#"${date%%[![:space:]]*}"}"
+    recovered_kb="${recovered_kb#"${recovered_kb%%[![:space:]]*}"}"
+    items="${items#"${items%%[![:space:]]*}"}"
+    failed="${failed#"${failed%%[![:space:]]*}"}"
+    elapsed="${elapsed#"${elapsed%%[![:space:]]*}"}"
+    printf "  %-20s  ${GREEN}%14s${NC}  %8s  %8s  %6s\n" \
+      "$date" "$(fmt "$recovered_kb")" "$items" "$failed" "${elapsed}s"
+    total_kb=$((total_kb + recovered_kb))
+    total_items=$((total_items + items))
+  done < "$HISTORY_FILE"
+
+  printf "  ${DIM}────────────────────────────────────────────────────────────────────${NC}\n"
+  printf "  ${BOLD}Total recovered: ${GREEN}%s${NC} ${BOLD}across %d items${NC}\n" "$(fmt "$total_kb")" "$total_items"
+  echo ""
+  exit 0
+}
+
+save_history() {
+  local recovered_kb="$1" items="$2" failed="$3" elapsed="$4"
+  mkdir -p "$HISTORY_DIR"
+  printf "%s | %s | %s | %s | %s\n" \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$recovered_kb" "$items" "$failed" "$elapsed" \
+    >> "$HISTORY_FILE"
+}
+
+# ── Doctor mode ──────────────────────────────────────────────────────────────
+
+run_doctor() {
+  echo ""
+  printf "  ${BOLD}${CYAN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}\n"
+  printf "  ${BOLD}${CYAN}┃           diskdoc doctor — Disk Diagnosis                   ┃${NC}\n"
+  printf "  ${BOLD}${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}\n"
+  echo ""
+
+  local disk_line
+  disk_line=$(df -k / | tail -1)
+  local total avail used pct_free
+  total=$(echo "$disk_line" | awk '{print $2}')
+  avail=$(echo "$disk_line" | awk '{print $4}')
+  used=$((total - avail))
+  pct_free=$((avail * 100 / total))
+
+  printf "  ${DIM}Disk:${NC}  %s total  |  %s free (%d%%)  |  %s used\n" \
+    "$(fmt "$total")" "$(fmt "$avail")" "$pct_free" "$(fmt "$used")"
+  echo ""
+
+  if (( pct_free < 5 )); then
+    printf "  ${RED}${BOLD}⚠  CRITICAL: Less than 5%% free space!${NC}\n\n"
+  elif (( pct_free < 15 )); then
+    printf "  ${YELLOW}${BOLD}⚠  WARNING: Less than 15%% free space${NC}\n\n"
+  else
+    printf "  ${GREEN}✓  Disk health looks good${NC}\n\n"
+  fi
+
+  printf "  ${BOLD}Top space consumers in ~/Library:${NC}\n"
+  printf "  ${DIM}──────────────────────────────────────────────────────────${NC}\n"
+
+  local idx=1
+  while IFS=$'\t' read -r kb path; do
+    local name="${path#"$HOME"/Library/}"
+    name="${name%/}"
+    (( ${#name} > 44 )) && name="${name:0:41}..."
+    local color=""
+    if (( kb >= 10485760 )); then color="$RED"
+    elif (( kb >= 1048576 )); then color="$YELLOW"
+    fi
+    printf "  ${DIM}%2d.${NC} ${color}%-44s %10s${NC}\n" "$idx" "$name" "$(fmt "$kb")"
+    ((idx++))
+  done < <(du -sk "$HOME/Library/"*/ 2>/dev/null | sort -nr | head -15)
+
+  echo ""
+  printf "  ${BOLD}Top space consumers in ~/:${NC}\n"
+  printf "  ${DIM}──────────────────────────────────────────────────────────${NC}\n"
+
+  idx=1
+  while IFS=$'\t' read -r kb path; do
+    local name="${path#"$HOME"/}"
+    name="${name%/}"
+    (( ${#name} > 44 )) && name="${name:0:41}..."
+    local color=""
+    if (( kb >= 10485760 )); then color="$RED"
+    elif (( kb >= 1048576 )); then color="$YELLOW"
+    fi
+    printf "  ${DIM}%2d.${NC} ${color}%-44s %10s${NC}\n" "$idx" "$name" "$(fmt "$kb")"
+    ((idx++))
+  done < <(du -sk "$HOME/"*/ 2>/dev/null | sort -nr | head -10)
+
+  # Time Machine snapshots
+  local snap_count
+  snap_count=$(tmutil listlocalsnapshots / 2>/dev/null | grep -c "com.apple.TimeMachine" || true)
+  if (( snap_count > 0 )); then
+    echo ""
+    printf "  ${YELLOW}${BOLD}⏰ Time Machine:${NC} %d local snapshots found\n" "$snap_count"
+    printf "  ${DIM}   Free space with: sudo tmutil thinlocalsnapshots / 99999999999${NC}\n"
+  fi
+
+  echo ""
+  printf "  ${DIM}Run 'diskdoc' for interactive cleanup.${NC}\n"
+  printf "  ${DIM}Run 'diskdoc --scan' to see what can be safely deleted.${NC}\n"
+  echo ""
+  exit 0
+}
+
+# ── Dispatch subcommands ─────────────────────────────────────────────────────
+
+[[ "$SHOW_HISTORY" == true ]] && show_history
+[[ "$DOCTOR_MODE" == true ]] && run_doctor
+
+# ── Interactive selector ─────────────────────────────────────────────────────
 
 interactive_select() {
   local num=${#SORTED[@]}
   local cursor=0
   local total_lines=$((num + 3))
 
-  # All selected by default
   for ((i=0; i<num; i++)); do SELECTED[$i]=1; done
 
-  # Save terminal state
   tput civis 2>/dev/null
   stty -echo 2>/dev/null
   trap 'tput cnorm 2>/dev/null; stty echo 2>/dev/null' EXIT INT TERM
 
   draw_selector() {
-    # On redraws, move cursor back up to overwrite
     [[ "${1:-}" == "redraw" ]] && printf '\033[%dA' "$total_lines"
 
     local sel_kb=0
@@ -185,16 +443,13 @@ interactive_select() {
 
     printf "\033[K\n"
     printf "  ${BOLD}Selected: ${sel_count}/${num} items — $(fmt $sel_kb)${NC}\033[K\n"
-    printf "  ${DIM}arrows=move  space=toggle  a=all  n=none  enter=confirm  q=cancel${NC}\033[K\n"
+    printf "  ${DIM}↑↓=move  space=toggle  a=all  n=none  enter=confirm  q=cancel${NC}\033[K\n"
   }
 
-  # First draw
   draw_selector
 
-  # Input loop
   while true; do
     IFS= read -rsn1 key
-
     case "$key" in
       $'\x1b')
         read -rsn2 seq
@@ -210,133 +465,367 @@ interactive_select() {
           SELECTED[$cursor]=1
         fi
         ;;
-      'a'|'A')
-        for ((i=0; i<num; i++)); do SELECTED[$i]=1; done
-        ;;
-      'n'|'N')
-        for ((i=0; i<num; i++)); do SELECTED[$i]=0; done
-        ;;
-      ''|$'\n')
-        break
-        ;;
+      'a'|'A') for ((i=0; i<num; i++)); do SELECTED[$i]=1; done ;;
+      'n'|'N') for ((i=0; i<num; i++)); do SELECTED[$i]=0; done ;;
+      ''|$'\n') break ;;
       'q'|'Q')
         tput cnorm 2>/dev/null
         stty echo 2>/dev/null
         echo ""
-        echo -e "  ${DIM}Cancelled. Nothing was deleted.${NC}"
+        printf "  ${DIM}Cancelled. Nothing was deleted.${NC}\n"
         exit 0
         ;;
     esac
-
     draw_selector "redraw"
   done
 
-  # Restore terminal
   tput cnorm 2>/dev/null
   stty echo 2>/dev/null
 }
 
 # ── Banner ───────────────────────────────────────────────────────────────────
 
-clear
-echo ""
-echo -e "${BOLD}${CYAN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-echo -e "${BOLD}${CYAN}┃              diskdoc v${VERSION}                                 ┃${NC}"
-echo -e "${BOLD}${CYAN}┃          macOS Disk Cleanup CLI                              ┃${NC}"
-echo -e "${BOLD}${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
-echo ""
+log "\n"
+log "  ${BOLD}${CYAN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}\n"
+log "  ${BOLD}${CYAN}┃              diskdoc v${VERSION}                                 ┃${NC}\n"
+log "  ${BOLD}${CYAN}┃          macOS Disk Cleanup CLI                              ┃${NC}\n"
+log "  ${BOLD}${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}\n"
+log "\n"
 
 # ── Initial disk state ───────────────────────────────────────────────────────
 DISK_LINE=$(df -k / | tail -1)
 DISK_TOTAL=$(echo "$DISK_LINE" | awk '{print $2}')
 DISK_AVAIL_BEFORE=$(echo "$DISK_LINE" | awk '{print $4}')
 DISK_USED_BEFORE=$((DISK_TOTAL - DISK_AVAIL_BEFORE))
+PCT_FREE_NOW=$((DISK_AVAIL_BEFORE * 100 / DISK_TOTAL))
 
-echo -e "  ${DIM}Disk:${NC}  $(fmt $DISK_TOTAL) total  |  $(fmt $DISK_AVAIL_BEFORE) free  |  $(fmt $DISK_USED_BEFORE) used"
-echo ""
-echo -e "  ${YELLOW}Scanning disk... this may take a moment${NC}"
-echo ""
+log "  ${DIM}Disk:${NC}  %s total  |  %s free (%d%%)  |  %s used\n" \
+  "$(fmt $DISK_TOTAL)" "$(fmt $DISK_AVAIL_BEFORE)" "$PCT_FREE_NOW" "$(fmt $DISK_USED_BEFORE)"
 
-# ── Phase 1: System targets (may need sudo) ─────────────────────────────────
-
-IDLE_PATH=$(sudo find /private/var/folders -name "com.apple.idleassetsd" -maxdepth 6 2>/dev/null | head -1)
-[[ -n "$IDLE_PATH" ]] && add "Apple Screensavers (idleassetsd)" "$IDLE_PATH" "System" "Safe — re-downloads" "rm-sudo"
-
-add "Trash" "$HOME/.Trash" "System" "Safe" "rm"
-
-# ── Phase 2: Large app data ─────────────────────────────────────────────────
-
-add "Docker Data"           "$HOME/Library/Containers/com.docker.docker/Data"       "App"       "Recreated on launch"   "rm"
-add "iOS Simulators"        "$HOME/Library/Developer/CoreSimulator"                 "Dev Tools" "Recreated by Xcode"    "rm"
-add "Xcode DerivedData"     "$HOME/Library/Developer/Xcode/DerivedData"             "Dev Tools" "Safe — build cache"    "rm"
-add "Android SDK"           "$HOME/Library/Android"                                 "Dev Tools" "Reinstall if needed"   "rm"
-add "Claude VM Bundles"     "$HOME/Library/Application Support/Claude/vm_bundles"   "App"       "Re-downloads on open"  "rm"
-add "Claude Cache"          "$HOME/Library/Application Support/Claude/Cache"        "App"       "Safe"                  "rm"
-add "Claude Code Cache"     "$HOME/Library/Application Support/Claude/Code Cache"   "App"       "Safe"                  "rm"
-add "ChatGPT App Data"      "$HOME/Library/Application Support/com.openai.atlas"    "App"       "Recreated on open"     "rm"
-add "Kiro Data"             "$HOME/Library/Application Support/Kiro"                "App"       "Remove if unused"      "rm"
-add "Windsurf Data"         "$HOME/Library/Application Support/Windsurf"            "App"       "Remove if unused"      "rm"
-add "Cursor Data"           "$HOME/Library/Application Support/Cursor"              "App"       "Remove if unused"      "rm"
-
-# ── Phase 3: Dynamic cache scan ─────────────────────────────────────────────
-
-if [[ -d "$HOME/Library/Caches" ]]; then
-  while IFS=$'\t' read -r size path; do
-    base=$(basename "$path")
-    name="Cache: $base"
-
-    already=false
-    for existing in "${T_PATHS[@]+"${T_PATHS[@]}"}"; do
-      [[ "$existing" == "$path" ]] && already=true && break
-    done
-    $already && continue
-
-    kb=$(echo "$size" | tr -d '[:space:]')
-    if (( kb > 51200 )); then
-      T_NAMES+=("$name")
-      T_PATHS+=("$path")
-      T_SIZES+=("$kb")
-      T_CATS+=("Cache")
-      T_RISKS+=("Safe — regenerates")
-      T_METHODS+=("rm")
-    fi
-  done < <(du -sk "$HOME/Library/Caches/"* 2>/dev/null)
+if [[ "$PROFILE" != "all" ]]; then
+  log "  ${DIM}Profile:${NC} ${BOLD}%s${NC}\n" "$PROFILE"
 fi
 
-# ── Phase 4: Code directories — node_modules ────────────────────────────────
+if (( MIN_SIZE_MB != 50 )); then
+  log "  ${DIM}Min size:${NC} ${BOLD}%d MB${NC}\n" "$MIN_SIZE_MB"
+fi
 
-for code_dir in "$HOME/code" "$HOME/projects" "$HOME/dev" "$HOME/src" "$HOME/repos" "$HOME/workspace" "$HOME/work"; do
-  [[ -d "$code_dir" ]] && add "node_modules ($(basename "$code_dir"))" "$code_dir" "Dev Tools" "Safe — npm install" "find-nm"
-done
+if [[ ${#EXCLUDES[@]} -gt 0 ]]; then
+  log "  ${DIM}Exclusions:${NC} %d paths from ~/.diskdocrc\n" "${#EXCLUDES[@]}"
+fi
 
-# ── Phase 5: Package manager caches ─────────────────────────────────────────
+SCAN_START=$(date +%s)
+log "\n"
 
-add "npm Cache"      "$HOME/.npm"                       "Pkg Manager" "Safe" "npm-cache"
-has_cmd pnpm  && add "pnpm Store"    "$HOME/Library/pnpm/store"     "Pkg Manager" "Safe" "pnpm-prune"
-has_cmd yarn  && add "Yarn Cache"    "$HOME/Library/Caches/Yarn"    "Pkg Manager" "Safe" "rm"
-has_cmd brew  && add "Homebrew Cache" "$HOME/Library/Caches/Homebrew" "Pkg Manager" "Safe" "brew-cleanup"
+# ── Code directories (shared by node_modules + Rust scans) ──────────────────
+CODE_DIRS=("$HOME/code" "$HOME/projects" "$HOME/dev" "$HOME/src" "$HOME/repos" "$HOME/workspace" "$HOME/work" "$HOME/Developer")
 
-# ── Display table ────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# PHASE 1: System
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "System"; then
+  cat_header "System" "$YELLOW"
+
+  NEEDS_SUDO=false
+  # Check if any system targets need sudo
+  if ! is_excluded "$HOME/.Trash"; then NEEDS_SUDO=false; fi  # Trash doesn't need sudo
+  # idleassetsd and system logs need sudo
+  if ! is_excluded "/private/var/folders" || ! is_excluded "/private/var/log"; then
+    NEEDS_SUDO=true
+  fi
+
+  if [[ "$NEEDS_SUDO" == true ]]; then
+    log "  │  ${YELLOW}⚠${NC}  ${DIM}System scan needs admin access. You may be prompted for your password.${NC}\n"
+  fi
+
+  scan_target "Trash" "$HOME/.Trash" "System" "Safe" "rm"
+
+  # iOS/iPadOS device backups
+  scan_target "iOS/iPadOS Backups" "$HOME/Library/Application Support/MobileSync/Backup" "System" "Old device backups" "rm"
+
+  # Apple Screensavers (idleassetsd) — requires sudo + special path search
+  if ! is_excluded "/private/var/folders"; then
+    log "\r\033[K  │  ${DIM}…${NC}  %-44s" "Apple Screensavers (idleassetsd)"
+    IDLE_PATH=$(sudo find /private/var/folders -name "com.apple.idleassetsd" -maxdepth 6 2>/dev/null | head -1)
+    if [[ -n "$IDLE_PATH" ]]; then
+      idle_kb=$(get_kb_sudo "$IDLE_PATH")
+      if (( idle_kb > MIN_SIZE_KB )); then
+        T_NAMES+=("Apple Screensavers (idleassetsd)")
+        T_PATHS+=("$IDLE_PATH")
+        T_SIZES+=("$idle_kb")
+        T_CATS+=("System")
+        T_RISKS+=("Safe — re-downloads")
+        T_METHODS+=("rm-sudo")
+        FOUND_TOTAL=$((FOUND_TOTAL + idle_kb))
+        log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Apple Screensavers (idleassetsd)" "$(fmt "$idle_kb")"
+      else
+        log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "Apple Screensavers (idleassetsd)"
+      fi
+    else
+      log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "Apple Screensavers (idleassetsd)"
+    fi
+  fi
+
+  # System logs
+  scan_target "System Logs" "/private/var/log" "System" "Safe — regenerates" "rm-sudo"
+
+  # Category totals
+  sys_count=0; sys_kb=0
+  for ((i=0; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "System" ]] && ((sys_count++)) && sys_kb=$((sys_kb + T_SIZES[$i]))
+  done
+  cat_footer "$sys_count" "$sys_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# PHASE 2: Dev Tools
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "Dev Tools"; then
+  cat_header "Dev Tools" "$CYAN"
+  dev_start=${#T_NAMES[@]}
+
+  scan_target "Xcode DerivedData"   "$HOME/Library/Developer/Xcode/DerivedData"    "Dev Tools" "Safe — build cache"    "rm"
+  scan_target "Xcode Archives"      "$HOME/Library/Developer/Xcode/Archives"       "Dev Tools" "Safe — old builds"     "rm"
+  scan_target "iOS Simulators"      "$HOME/Library/Developer/CoreSimulator"         "Dev Tools" "Recreated by Xcode"    "rm"
+  scan_target "Android SDK"         "$HOME/Library/Android"                         "Dev Tools" "Reinstall if needed"   "rm"
+  scan_target "CocoaPods Cache"     "$HOME/Library/Caches/CocoaPods"               "Dev Tools" "Safe — re-downloads"   "rm"
+  scan_target "Gradle Cache"        "$HOME/.gradle/caches"                         "Dev Tools" "Safe — re-downloads"   "rm"
+  scan_target "Go Module Cache"     "$HOME/go/pkg/mod"                             "Dev Tools" "Safe — go mod download" "rm"
+
+  # node_modules search across code directories
+  for code_dir in "${CODE_DIRS[@]}"; do
+    [[ -d "$code_dir" ]] || continue
+    dir_name="$(basename "$code_dir")"
+    matches_profile "Dev Tools" || continue
+    is_excluded "$code_dir" && continue
+
+    log "\r\033[K  │  ${DIM}…${NC}  %-44s" "node_modules (~/$dir_name)"
+    nm_kb=$(find "$code_dir" -name "node_modules" -maxdepth 4 -type d -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
+    if (( nm_kb > MIN_SIZE_KB )); then
+      T_NAMES+=("node_modules (~/$dir_name)")
+      T_PATHS+=("$code_dir")
+      T_SIZES+=("$nm_kb")
+      T_CATS+=("Dev Tools")
+      T_RISKS+=("Safe — npm install")
+      T_METHODS+=("find-nm")
+      FOUND_TOTAL=$((FOUND_TOTAL + nm_kb))
+      log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "node_modules (~/$dir_name)" "$(fmt "$nm_kb")"
+    else
+      log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "node_modules (~/$dir_name)"
+    fi
+  done
+
+  # Rust target/ directories across code directories
+  for code_dir in "${CODE_DIRS[@]}"; do
+    [[ -d "$code_dir" ]] || continue
+    dir_name="$(basename "$code_dir")"
+    is_excluded "$code_dir" && continue
+
+    log "\r\033[K  │  ${DIM}…${NC}  %-44s" "Rust targets (~/$dir_name)"
+    rust_kb=0
+    rust_found=false
+    while IFS= read -r cargo_file; do
+      target_dir="$(dirname "$cargo_file")/target"
+      if [[ -d "$target_dir" ]]; then
+        kb=$(get_kb "$target_dir")
+        rust_kb=$((rust_kb + kb))
+        rust_found=true
+      fi
+    done < <(find "$code_dir" -name "Cargo.toml" -maxdepth 5 2>/dev/null)
+
+    if $rust_found && (( rust_kb > MIN_SIZE_KB )); then
+      T_NAMES+=("Rust targets (~/$dir_name)")
+      T_PATHS+=("$code_dir")
+      T_SIZES+=("$rust_kb")
+      T_CATS+=("Dev Tools")
+      T_RISKS+=("Safe — cargo build")
+      T_METHODS+=("find-rust")
+      FOUND_TOTAL=$((FOUND_TOTAL + rust_kb))
+      log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Rust targets (~/$dir_name)" "$(fmt "$rust_kb")"
+    else
+      log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "Rust targets (~/$dir_name)"
+    fi
+  done
+
+  dev_count=0; dev_kb=0
+  for ((i=dev_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((dev_count++)) && dev_kb=$((dev_kb + T_SIZES[$i]))
+  done
+  cat_footer "$dev_count" "$dev_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# PHASE 3: App Data
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "App"; then
+  cat_header "App Data" "$MAGENTA"
+  app_start=${#T_NAMES[@]}
+
+  scan_target "Docker Data"          "$HOME/Library/Containers/com.docker.docker/Data"             "App" "Recreated on launch"   "rm"
+  scan_target "Claude VM Bundles"    "$HOME/Library/Application Support/Claude/vm_bundles"         "App" "Re-downloads on open"  "rm"
+  scan_target "Claude Cache"         "$HOME/Library/Application Support/Claude/Cache"              "App" "Safe"                  "rm"
+  scan_target "Claude Code Cache"    "$HOME/Library/Application Support/Claude/Code Cache"         "App" "Safe"                  "rm"
+  scan_target "ChatGPT App Data"     "$HOME/Library/Application Support/com.openai.chat"          "App" "Recreated on open"     "rm"
+  scan_target "ChatGPT Data (atlas)" "$HOME/Library/Application Support/com.openai.atlas"         "App" "Recreated on open"     "rm"
+  scan_target "Kiro Data"            "$HOME/Library/Application Support/Kiro"                     "App" "Remove if unused"      "rm"
+  scan_target "Windsurf Data"        "$HOME/Library/Application Support/Windsurf"                 "App" "Remove if unused"      "rm"
+  scan_target "Cursor Data"          "$HOME/Library/Application Support/Cursor"                   "App" "Remove if unused"      "rm"
+  scan_target "Mail Attachment Cache" "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads" "App" "Re-downloads from server" "rm"
+
+  app_count=0; app_kb=0
+  for ((i=app_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "App" ]] && ((app_count++)) && app_kb=$((app_kb + T_SIZES[$i]))
+  done
+  cat_footer "$app_count" "$app_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# PHASE 4: Dynamic caches (~/Library/Caches/* > threshold)
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "Cache"; then
+  cat_header "Caches" "$GREEN"
+  cache_start=${#T_NAMES[@]}
+
+  if [[ -d "$HOME/Library/Caches" ]]; then
+    log "  │  ${DIM}Scanning ~/Library/Caches for entries > %d MB...${NC}\n" "$MIN_SIZE_MB"
+
+    while IFS=$'\t' read -r size path; do
+      base=$(basename "$path")
+      name="Cache: $base"
+
+      # Skip items already added (CocoaPods, Homebrew, Yarn, pip)
+      already=false
+      for existing in "${T_PATHS[@]+"${T_PATHS[@]}"}"; do
+        [[ "$existing" == "$path" ]] && already=true && break
+      done
+      $already && continue
+
+      is_excluded "$path" && continue
+      matches_profile "Cache" || continue
+
+      kb=$(echo "$size" | tr -d '[:space:]')
+      if (( kb > MIN_SIZE_KB )); then
+        T_NAMES+=("$name")
+        T_PATHS+=("$path")
+        T_SIZES+=("$kb")
+        T_CATS+=("Cache")
+        T_RISKS+=("Safe — regenerates")
+        T_METHODS+=("rm")
+        FOUND_TOTAL=$((FOUND_TOTAL + kb))
+        log "  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "$name" "$(fmt "$kb")"
+      fi
+    done < <(du -sk "$HOME/Library/Caches/"* 2>/dev/null | sort -nr)
+  fi
+
+  cache_count=0; cache_kb=0
+  for ((i=cache_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Cache" ]] && ((cache_count++)) && cache_kb=$((cache_kb + T_SIZES[$i]))
+  done
+  cat_footer "$cache_count" "$cache_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# PHASE 5: Package Managers
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "Pkg Manager"; then
+  cat_header "Package Managers" "$BLUE"
+  pkg_start=${#T_NAMES[@]}
+
+  scan_target "npm Cache"       "$HOME/.npm"                       "Pkg Manager" "Safe" "npm-cache"
+  has_cmd pnpm  && scan_target "pnpm Store"     "$HOME/Library/pnpm/store"     "Pkg Manager" "Safe" "pnpm-prune"
+  has_cmd yarn  && scan_target "Yarn Cache"     "$HOME/Library/Caches/Yarn"    "Pkg Manager" "Safe" "rm"
+  has_cmd pip3  && scan_target "pip Cache"      "$HOME/Library/Caches/pip"     "Pkg Manager" "Safe" "rm"
+  has_cmd brew  && scan_target "Homebrew Cache" "$HOME/Library/Caches/Homebrew" "Pkg Manager" "Safe" "brew-cleanup"
+
+  pkg_count=0; pkg_kb=0
+  for ((i=pkg_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Pkg Manager" ]] && ((pkg_count++)) && pkg_kb=$((pkg_kb + T_SIZES[$i]))
+  done
+  cat_footer "$pkg_count" "$pkg_kb"
+fi
+
+# ── Scan summary ─────────────────────────────────────────────────────────────
+
+SCAN_END=$(date +%s)
+SCAN_ELAPSED=$((SCAN_END - SCAN_START))
+
+log "\n"
 
 if [[ ${#T_NAMES[@]} -eq 0 ]]; then
-  echo -e "  ${GREEN}Your disk is clean! No large items found.${NC}"
+  log "  ${GREEN}✓  Your disk is clean! No items found above %d MB.${NC}\n" "$MIN_SIZE_MB"
+  log "  ${DIM}Scanned in ${SCAN_ELAPSED}s${NC}\n\n"
   exit 0
 fi
 
-# Sort indices by size descending
+log "  ${BOLD}Found %d items — %s recoverable${NC}  ${DIM}(scanned in %ds)${NC}\n\n" \
+  "${#T_NAMES[@]}" "$(fmt $FOUND_TOTAL)" "$SCAN_ELAPSED"
+
+# ── JSON output ──────────────────────────────────────────────────────────────
+
+if [[ "$JSON_MODE" == true ]]; then
+  # Sort by size descending
+  declare -a JS_SORTED=()
+  for i in "${!T_SIZES[@]}"; do
+    JS_SORTED+=("${T_SIZES[$i]}|$i")
+  done
+  IFS=$'\n' read -r -d '' -a JS_SORTED < <(printf '%s\n' "${JS_SORTED[@]}" | sort -t'|' -k1 -nr && printf '\0') || true
+
+  json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    echo "$s"
+  }
+
+  echo "{"
+  printf '  "version": "%s",\n' "$VERSION"
+  printf '  "disk": {\n'
+  printf '    "total_bytes": %d,\n' "$((DISK_TOTAL * 1024))"
+  printf '    "free_bytes": %d,\n' "$((DISK_AVAIL_BEFORE * 1024))"
+  printf '    "used_bytes": %d\n' "$((DISK_USED_BEFORE * 1024))"
+  printf '  },\n'
+  printf '  "min_size_mb": %d,\n' "$MIN_SIZE_MB"
+  printf '  "profile": "%s",\n' "$PROFILE"
+  printf '  "scan_seconds": %d,\n' "$SCAN_ELAPSED"
+  printf '  "total_recoverable_bytes": %d,\n' "$((FOUND_TOTAL * 1024))"
+  printf '  "items": [\n'
+
+  first=true
+  for entry in "${JS_SORTED[@]}"; do
+    i="${entry#*|}"
+    $first || printf ',\n'
+    first=false
+    printf '    {\n'
+    printf '      "name": "%s",\n' "$(json_escape "${T_NAMES[$i]}")"
+    printf '      "path": "%s",\n' "$(json_escape "${T_PATHS[$i]}")"
+    printf '      "category": "%s",\n' "${T_CATS[$i]}"
+    printf '      "size_bytes": %d,\n' "$((T_SIZES[$i] * 1024))"
+    printf '      "size_human": "%s",\n' "$(fmt "${T_SIZES[$i]}")"
+    printf '      "risk": "%s",\n' "$(json_escape "${T_RISKS[$i]}")"
+    printf '      "method": "%s"\n' "${T_METHODS[$i]}"
+    printf '    }'
+  done
+
+  printf '\n  ]\n'
+  echo "}"
+  exit 0
+fi
+
+# ── Sort by size descending ──────────────────────────────────────────────────
+
 declare -a SORTED=()
 for i in "${!T_SIZES[@]}"; do
   SORTED+=("${T_SIZES[$i]}|$i")
 done
-IFS=$'\n' SORTED=($(printf '%s\n' "${SORTED[@]}" | sort -t'|' -k1 -nr)); unset IFS
+IFS=$'\n' read -r -d '' -a SORTED < <(printf '%s\n' "${SORTED[@]}" | sort -t'|' -k1 -nr && printf '\0') || true
 
-# Calculate total
-TOTAL_KB=0
-for s in "${T_SIZES[@]}"; do
-  TOTAL_KB=$((TOTAL_KB + s))
-done
+# ── Display table ────────────────────────────────────────────────────────────
 
-# Header
 echo -e "${BOLD}${CYAN}  ┌─────┬──────────────────────────────────┬──────────────┬────────────┬──────────────────────────┐${NC}"
 printf  "${BOLD}${CYAN}  │${NC}${BOLD} %-3s ${CYAN}│${NC}${BOLD} %-32s ${CYAN}│${NC}${BOLD} %-12s ${CYAN}│${NC}${BOLD} %-10s ${CYAN}│${NC}${BOLD} %-24s ${CYAN}│${NC}\n" "#" "Name" "Category" "Size" "Risk"
 echo -e "${BOLD}${CYAN}  ├─────┼──────────────────────────────────┼──────────────┼────────────┼──────────────────────────┤${NC}"
@@ -369,21 +858,58 @@ for entry in "${SORTED[@]}"; do
 done
 
 echo -e "${BOLD}${CYAN}  ├─────┴──────────────────────────────────┴──────────────┼────────────┼──────────────────────────┤${NC}"
-printf  "${BOLD}${CYAN}  │${NC}${BOLD}${MAGENTA}  TOTAL RECOVERABLE                                     ${CYAN}│${NC}${BOLD}${MAGENTA} %10s ${CYAN}│${NC}                          ${CYAN}│${NC}\n" "$(fmt $TOTAL_KB)"
+printf  "${BOLD}${CYAN}  │${NC}${BOLD}${MAGENTA}  TOTAL RECOVERABLE                                     ${CYAN}│${NC}${BOLD}${MAGENTA} %10s ${CYAN}│${NC}                          ${CYAN}│${NC}\n" "$(fmt $FOUND_TOTAL)"
 echo -e "${BOLD}${CYAN}  └────────────────────────────────────────────────────────┴────────────┴──────────────────────────┘${NC}"
 echo ""
+
+# ── Dry-run output ───────────────────────────────────────────────────────────
+
+if [[ "$DRY_RUN" == true ]]; then
+  echo -e "  ${BOLD}${YELLOW}Dry run — commands that would execute:${NC}"
+  echo ""
+
+  idx=1
+  for entry in "${SORTED[@]}"; do
+    i="${entry#*|}"
+    method="${T_METHODS[$i]}"
+    path="${T_PATHS[$i]}"
+    name="${T_NAMES[$i]}"
+    (( ${#name} > 36 )) && name="${name:0:33}..."
+
+    cmd=""
+    case "$method" in
+      rm)           cmd="rm -rf \"$path\"" ;;
+      rm-sudo)      cmd="sudo rm -rf \"$path\"" ;;
+      find-nm)      cmd="find \"$path\" -name node_modules -maxdepth 4 -type d -exec rm -rf {} +" ;;
+      find-rust)    cmd="find \"$path\" -name Cargo.toml -maxdepth 5 → rm -rf target/" ;;
+      npm-cache)    cmd="npm cache clean --force" ;;
+      pnpm-prune)   cmd="pnpm store prune" ;;
+      brew-cleanup) cmd="brew cleanup --prune=all" ;;
+    esac
+
+    printf "  ${DIM}[%2d]${NC} %-36s  ${DIM}%s${NC}\n" "$idx" "$name" "$cmd"
+    ((idx++))
+  done
+
+  echo ""
+  printf "  ${DIM}Total: %s would be recovered${NC}\n" "$(fmt $FOUND_TOTAL)"
+  printf "  ${DIM}Run 'diskdoc' without --dry-run to execute.${NC}\n"
+  echo ""
+  exit 0
+fi
 
 # ── Scan only mode ───────────────────────────────────────────────────────────
 
 if [[ "$SCAN_ONLY" == true ]]; then
   echo -e "  ${DIM}Scan mode: nothing was deleted.${NC}"
+  echo -e "  ${DIM}Run 'diskdoc' to interactively select and clean.${NC}"
+  echo ""
   exit 0
 fi
 
 # ── Selection ────────────────────────────────────────────────────────────────
 
 if [[ "$AUTO_MODE" == true ]]; then
-  # Auto mode: select all
   for ((i=0; i<${#SORTED[@]}; i++)); do SELECTED[$i]=1; done
   echo -e "  ${YELLOW}Auto mode: proceeding with cleanup...${NC}"
 else
@@ -391,7 +917,6 @@ else
   echo ""
   interactive_select
 
-  # Check if anything is selected
   any_selected=false
   for s in "${SELECTED[@]}"; do
     [[ "$s" == "1" ]] && any_selected=true && break
@@ -405,7 +930,7 @@ else
 fi
 
 echo ""
-echo -e "  ${YELLOW}Cleaning...${NC}"
+echo -e "  ${YELLOW}${BOLD}Cleaning...${NC}"
 echo ""
 
 # ── Cleanup ──────────────────────────────────────────────────────────────────
@@ -418,7 +943,6 @@ selector_idx=0
 for entry in "${SORTED[@]}"; do
   i="${entry#*|}"
 
-  # Skip unselected items
   if [[ "${SELECTED[$selector_idx]}" != "1" ]]; then
     ((selector_idx++))
     continue
@@ -428,9 +952,9 @@ for entry in "${SORTED[@]}"; do
   method="${T_METHODS[$i]}"
   path="${T_PATHS[$i]}"
   name="${T_NAMES[$i]}"
-  (( ${#name} > 40 )) && name="${name:0:37}..."
+  (( ${#name} > 42 )) && name="${name:0:39}..."
 
-  printf "  %-42s " "$name"
+  printf "  ${DIM}[%d/%d]${NC} %-42s " "$((ITEMS_CLEANED + ITEMS_FAILED + 1))" "${#SORTED[@]}" "$name"
 
   ok=false
   case "$method" in
@@ -442,6 +966,13 @@ for entry in "${SORTED[@]}"; do
       ;;
     find-nm)
       find "$path" -name "node_modules" -maxdepth 4 -type d -exec rm -rf {} + 2>/dev/null
+      ok=true
+      ;;
+    find-rust)
+      while IFS= read -r cargo_file; do
+        target_dir="$(dirname "$cargo_file")/target"
+        [[ -d "$target_dir" ]] && rm -rf "$target_dir" 2>/dev/null
+      done < <(find "$path" -name "Cargo.toml" -maxdepth 5 2>/dev/null)
       ok=true
       ;;
     npm-cache)
@@ -484,9 +1015,9 @@ echo -e "${BOLD}${CYAN}┏━━━━━━━━━━━━━━━━━━
 echo -e "${BOLD}${CYAN}┃                      Final Report                          ┃${NC}"
 echo -e "${BOLD}${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
 echo ""
-echo -e "  ${DIM}Total disk .........${NC}  $(fmt $DISK_TOTAL)"
-echo -e "  ${DIM}Free before ........${NC}  $(fmt $DISK_AVAIL_BEFORE) (${PCT_FREE_BEFORE}%)"
-echo -e "  ${DIM}Free after .........${NC}  ${GREEN}${BOLD}$(fmt $DISK_AVAIL_AFTER) (${PCT_FREE_AFTER}%)${NC}"
+echo -e "  ${DIM}Total disk .........${NC}  $(fmt "$DISK_TOTAL")"
+echo -e "  ${DIM}Free before ........${NC}  $(fmt "$DISK_AVAIL_BEFORE") (${PCT_FREE_BEFORE}%)"
+echo -e "  ${DIM}Free after .........${NC}  ${GREEN}${BOLD}$(fmt "$DISK_AVAIL_AFTER") (${PCT_FREE_AFTER}%)${NC}"
 echo ""
 echo -e "  ${BOLD}${GREEN}Space recovered ....  $(fmt $ACTUAL_RECOVERED)${NC}"
 echo -e "  ${DIM}Items cleaned ......${NC}  ${ITEMS_CLEANED} succeeded, ${ITEMS_FAILED} failed"
@@ -501,20 +1032,22 @@ filled_before=$((DISK_USED_BEFORE * BAR / DISK_TOTAL))
 empty_before=$((BAR - filled_before))
 for ((j=0; j<filled_before; j++)); do echo -ne "${RED}█${NC}"; done
 for ((j=0; j<empty_before; j++)); do echo -ne "${DIM}░${NC}"; done
-echo -e "]  ${DIM}$(fmt $DISK_AVAIL_BEFORE) free${NC}"
+echo -e "]  ${DIM}$(fmt "$DISK_AVAIL_BEFORE") free${NC}"
 
 echo -ne "  After:  ["
 filled_after=$((DISK_USED_AFTER * BAR / DISK_TOTAL))
 empty_after=$((BAR - filled_after))
 for ((j=0; j<filled_after; j++)); do echo -ne "${YELLOW}█${NC}"; done
 for ((j=0; j<empty_after; j++)); do echo -ne "${GREEN}░${NC}"; done
-echo -e "]  ${GREEN}${BOLD}$(fmt $DISK_AVAIL_AFTER) free${NC}"
+echo -e "]  ${GREEN}${BOLD}$(fmt "$DISK_AVAIL_AFTER") free${NC}"
+
+# ── Save to history ──────────────────────────────────────────────────────────
+
+save_history "$ACTUAL_RECOVERED" "$ITEMS_CLEANED" "$ITEMS_FAILED" "$ELAPSED"
 
 echo ""
 echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "  ${DIM}Cleanup saved to ~/.diskdoc/history.log${NC}"
 echo -e "  ${DIM}Run periodically to keep your disk clean.${NC}"
-echo -e "  ${DIM}  diskdoc          Interactive${NC}"
-echo -e "  ${DIM}  diskdoc --auto   No confirmation${NC}"
-echo -e "  ${DIM}  diskdoc --scan   Scan only${NC}"
 echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
