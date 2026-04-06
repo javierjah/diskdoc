@@ -20,6 +20,7 @@
 #   diskdoc doctor             Diagnose disk usage (top consumers)
 #   diskdoc history            Show cleanup history
 # ============================================================================
+# shellcheck disable=SC2059,SC2004
 set -uo pipefail
 
 VERSION="2.0.0"
@@ -535,7 +536,7 @@ DISK_USED_BEFORE=$((DISK_TOTAL - DISK_AVAIL_BEFORE))
 PCT_FREE_NOW=$((DISK_AVAIL_BEFORE * 100 / DISK_TOTAL))
 
 log "  ${DIM}Disk:${NC}  %s total  |  %s free (%d%%)  |  %s used\n" \
-  "$(fmt $DISK_TOTAL)" "$(fmt $DISK_AVAIL_BEFORE)" "$PCT_FREE_NOW" "$(fmt $DISK_USED_BEFORE)"
+  "$(fmt "$DISK_TOTAL")" "$(fmt "$DISK_AVAIL_BEFORE")" "$PCT_FREE_NOW" "$(fmt "$DISK_USED_BEFORE")"
 
 if [[ "$PROFILE" != "all" ]]; then
   log "  ${DIM}Profile:${NC} ${BOLD}%s${NC}\n" "$PROFILE"
@@ -1417,7 +1418,6 @@ if [[ "$REPORT_MODE" == true ]]; then
       cat_total=$((cat_total + T_SIZES[$i]))
     done
 
-    rc_color=$(risk_color "${T_RISKS[${cat_items[0]}]}")
     printf "  ${BOLD}%s${NC}  ${DIM}(%s)${NC}\n" "$rcat" "$(fmt "$cat_total")"
 
     for ci in "${cat_items[@]}"; do
