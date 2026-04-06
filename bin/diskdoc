@@ -12,6 +12,7 @@
 #   diskdoc --scan             Scan only, don't delete anything
 #   diskdoc --dry-run          Show what would be deleted (with commands)
 #   diskdoc --report           Full audit (includes PERSONAL, no deletion)
+#   diskdoc --dev-artifacts    Deep scan for build artifacts in code dirs
 #   diskdoc --json             Output scan results as JSON
 #   diskdoc --min-size N       Minimum size in MB to show (default: 50)
 #   diskdoc --profile PROFILE  Filter: all, dev, system, apps
@@ -47,6 +48,7 @@ SCAN_ONLY=false
 DRY_RUN=false
 JSON_MODE=false
 REPORT_MODE=false
+DEV_ARTIFACTS=false
 MIN_SIZE_MB=50
 PROFILE="all"
 DOCTOR_MODE=false
@@ -62,6 +64,7 @@ Usage:
   diskdoc --auto             Clean without asking for confirmation
   diskdoc --dry-run          Show what would be deleted (with commands)
   diskdoc --report           Full audit tree (includes PERSONAL, no deletion)
+  diskdoc --dev-artifacts    Deep scan for build artifacts in code dirs
   diskdoc --json             Output scan results as JSON (implies --scan)
   diskdoc --min-size N       Minimum size in MB to include (default: 50)
   diskdoc --profile PROFILE  Filter by profile: all, dev, system, apps
@@ -110,6 +113,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)    DRY_RUN=true; SCAN_ONLY=true ;;
     --json)       JSON_MODE=true; SCAN_ONLY=true ;;
     --report)     REPORT_MODE=true; SCAN_ONLY=true ;;
+    --dev-artifacts) DEV_ARTIFACTS=true ;;
     --no-color)   disable_colors ;;
     --min-size)
       if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
@@ -858,6 +862,48 @@ if matches_profile "Dev Tools"; then
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
+# PHASE: Dev Artifacts (--dev-artifacts deep scan)
+# ════════════════════════════════════════════════════════════════════════════
+
+if [[ "$DEV_ARTIFACTS" == true ]] && matches_profile "Dev Tools"; then
+  cat_header "Dev Artifacts (deep scan)" "$CYAN"
+  da_start=${#T_NAMES[@]}
+
+  ARTIFACT_DIRS=("node_modules" "target" ".next" ".nuxt" ".turbo" "dist" "build" ".gradle" "__pycache__" ".venv" "venv" "vendor" ".prisma" "coverage")
+
+  for code_dir in "${CODE_DIRS[@]}"; do
+    [[ -d "$code_dir" ]] || continue
+    dir_name="$(basename "$code_dir")"
+    is_excluded "$code_dir" && continue
+
+    for artifact in "${ARTIFACT_DIRS[@]}"; do
+      log "\r\033[K  │  ${DIM}…${NC}  %-44s" "${artifact} (~/$dir_name)"
+
+      art_kb=$(find "$code_dir" -name "$artifact" -maxdepth 5 -type d -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
+
+      if (( art_kb > MIN_SIZE_KB )); then
+        T_NAMES+=("${artifact} (~/$dir_name)")
+        T_PATHS+=("$code_dir")
+        T_SIZES+=("$art_kb")
+        T_CATS+=("Dev Tools")
+        T_RISKS+=("SAFE")
+        T_METHODS+=("find-artifact")
+        FOUND_TOTAL=$((FOUND_TOTAL + art_kb))
+        log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "${artifact} (~/$dir_name)" "$(fmt "$art_kb")"
+      else
+        log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "${artifact} (~/$dir_name)"
+      fi
+    done
+  done
+
+  da_count=0; da_kb=0
+  for ((i=da_start; i<${#T_NAMES[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((da_count++)) && da_kb=$((da_kb + T_SIZES[$i]))
+  done
+  cat_footer "$da_count" "$da_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
 # PHASE: App Data
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -1330,6 +1376,7 @@ if [[ "$DRY_RUN" == true ]]; then
       tm-thin)      cmd="sudo tmutil thinlocalsnapshots / 99999999999" ;;
       xcrun-sim)    cmd="xcrun simctl delete unavailable" ;;
       qlmanage-reset) cmd="qlmanage -r cache && rm -rf \"$path\"" ;;
+      find-artifact)  cmd="find \"$path\" -name '${name%% (*}' -maxdepth 5 -type d -exec rm -rf {} +" ;;
     esac
 
     printf "  ${DIM}[%2d]${NC} %-36s  ${DIM}%s${NC}\n" "$idx" "$name" "$cmd"
@@ -1449,6 +1496,11 @@ for entry in "${SORTED[@]}"; do
       ;;
     qlmanage-reset)
       qlmanage -r cache &>/dev/null && rm -rf "$path" 2>/dev/null && ok=true
+      ;;
+    find-artifact)
+      artifact_name="${name%% (*}"
+      find "$path" -name "$artifact_name" -maxdepth 5 -type d -exec rm -rf {} + 2>/dev/null
+      ok=true
       ;;
   esac
 
