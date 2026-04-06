@@ -1097,71 +1097,6 @@ fi
 SCAN_START=$(date +%s)
 log "\n"
 
-# ── Parallel scan infrastructure ────────────────────────────────────────────
-# Subshells can't modify parent arrays. Each parallel group writes results to
-# a temp file. After wait, _merge_parallel reads them into T_* arrays.
-
-_SCAN_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/diskdoc_scan.XXXXXX")
-trap 'rm -rf "$_SCAN_TMPDIR"' EXIT
-
-# Write one scan result to a temp file (used inside subshells)
-# Format: 6 fields per line, separated by ASCII unit separator (0x1f)
-_emit_item() {
-  local name="$1" path="$2" kb="$3" cat="$4" risk="$5" method="$6" file="$7"
-  printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' "$name" "$path" "$kb" "$cat" "$risk" "$method" >> "$file"
-}
-
-# scan_target variant for parallel subshells — writes to temp file instead of arrays
-_scan_target_parallel() {
-  local name="$1" path="$2" cat="$3" risk="$4" method="${5:-rm}" file="$6"
-  [[ "$PROFILE" != "all" ]] && ! matches_profile "$cat" && return 0
-  is_excluded "$path" && return 0
-
-  local kb=0
-  case "$method" in
-    rm-sudo) kb=$(get_kb_sudo "$path") ;;
-    *)       kb=$(get_kb "$path") ;;
-  esac
-
-  if (( kb > MIN_SIZE_KB )); then
-    _emit_item "$name" "$path" "$kb" "$cat" "$risk" "$method" "$file"
-  fi
-}
-
-# scan_vm_bundle variant for parallel subshells
-_scan_vm_bundle_parallel() {
-  local dir="$1" ext="$2" cat="$3" risk="$4" method="${5:-rm}" file="$6"
-  [[ -d "$dir" ]] || return 0
-
-  while IFS= read -r bundle; do
-    [[ -d "$bundle" ]] || continue
-    local bname
-    bname=$(basename "$bundle" "$ext")
-    is_excluded "$bundle" && continue
-    local kb
-    kb=$(get_kb "$bundle")
-    if (( kb > MIN_SIZE_KB )); then
-      _emit_item "$bname" "$bundle" "$kb" "$cat" "$risk" "$method" "$file"
-    fi
-  done < <(find "$dir" -maxdepth 1 -name "*${ext}" -type d 2>/dev/null)
-}
-
-# Merge results from a temp file into T_* arrays
-_merge_parallel() {
-  local file="$1"
-  [[ -f "$file" ]] || return 0
-  while IFS=$'\x1f' read -r name path kb cat risk method; do
-    [[ -z "$name" ]] && continue
-    T_NAMES+=("$name")
-    T_PATHS+=("$path")
-    T_SIZES+=("$kb")
-    T_CATS+=("$cat")
-    T_RISKS+=("$risk")
-    T_METHODS+=("$method")
-    FOUND_TOTAL=$((FOUND_TOTAL + kb))
-  done < "$file"
-}
-
 run_all_scans() {
 
 # ── Code directories (shared by node_modules + Rust scans) ──────────────────
@@ -1854,26 +1789,8 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# PARALLEL SCAN GROUPS — independent categories run concurrently
-# Each subshell inherits all functions and state, writes results to tempfile.
+# ★ TIER 1: Massive impact categories (20-500+ GB)
 # ════════════════════════════════════════════════════════════════════════════
-
-# Helper: dump T_* entries added since index $1 to file $2
-_dump_new_entries() {
-  local start="$1" file="$2"
-  for ((i=start; i<${#T_NAMES[@]}; i++)); do
-    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' \
-      "${T_NAMES[$i]}" "${T_PATHS[$i]}" "${T_SIZES[$i]}" \
-      "${T_CATS[$i]}" "${T_RISKS[$i]}" "${T_METHODS[$i]}" >> "$file"
-  done
-}
-
-log "  ${C_DIM}Running parallel scan groups...${C_RESET}\n"
-
-# ── Parallel Group 1: Virtualization + Docker.raw + Creative ────────────
-(
-  _pg_start=${#T_NAMES[@]}
-  log() { :; }  # suppress progress in subshell
 
 # ── A1-A3: Virtualization — Parallels, VMware, UTM ─────────────────────────
 
@@ -2036,10 +1953,6 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   cat_footer "$cr_count" "$cr_kb"
 fi
 
-  _dump_new_entries "$_pg_start" "$_SCAN_TMPDIR/p1_virt_creative.tsv"
-) &
-_PG1_PID=$!
-
 # ── A9: Mail — IMAP logs + versioned databases ────────────────────────────
 
 if matches_profile "Personal" || matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
@@ -2161,11 +2074,6 @@ fi
 # TIER 2: Large impact categories (5-100+ GB)
 # ════════════════════════════════════════════════════════════════════════════
 
-# ── Parallel Group 2: Browser caches + browser personal data ────────────
-(
-  _pg_start=${#T_NAMES[@]}
-  log() { :; }  # suppress progress in subshell
-
 # ── B1: Browser Service Worker Caches (generic Chromium function) ──────────
 
 declare -a CHROMIUM_NAMES=("Chrome" "Edge" "Brave" "Arc" "Vivaldi" "Opera")
@@ -2270,15 +2178,6 @@ if [[ "$REPORT_MODE" == true ]] || matches_profile "Personal"; then
   done
   cat_footer "$bp_count" "$bp_kb"
 fi
-
-  _dump_new_entries "$_pg_start" "$_SCAN_TMPDIR/p2_browsers.tsv"
-) &
-_PG2_PID=$!
-
-# ── Parallel Group 3: B5-B17 + C1-C11 + C13 (tools, ecosystems, misc) ───
-(
-  _pg_start=${#T_NAMES[@]}
-  log() { :; }  # suppress progress in subshell
 
 # ── B5-B17: Various Tier 2 categories ────────────────────────────────────
 
@@ -2505,24 +2404,6 @@ if matches_profile "App" || matches_profile "System" || [[ "$PROFILE" == "all" ]
   scan_target "TV Downloads" "$HOME/Movies/TV/Media" "App" "REBUILD" "rm"
   scan_target "Dictionaries" "$HOME/Library/Dictionaries" "System" "SAFE" "rm"
   scan_target "Speech Voices" "/Library/Speech/Voices" "System" "REBUILD" "rm-sudo"
-fi
-
-  _dump_new_entries "$_pg_start" "$_SCAN_TMPDIR/p3_tools_lang.tsv"
-) &
-_PG3_PID=$!
-
-# ── Wait for parallel groups and merge results ──────────────────────────
-wait "$_PG1_PID" "$_PG2_PID" "$_PG3_PID" 2>/dev/null || true
-_merge_parallel "$_SCAN_TMPDIR/p1_virt_creative.tsv"
-_merge_parallel "$_SCAN_TMPDIR/p2_browsers.tsv"
-_merge_parallel "$_SCAN_TMPDIR/p3_tools_lang.tsv"
-
-_pg_merged=0
-[[ -f "$_SCAN_TMPDIR/p1_virt_creative.tsv" ]] && _pg_merged=$((_pg_merged + $(wc -l < "$_SCAN_TMPDIR/p1_virt_creative.tsv")))
-[[ -f "$_SCAN_TMPDIR/p2_browsers.tsv" ]] && _pg_merged=$((_pg_merged + $(wc -l < "$_SCAN_TMPDIR/p2_browsers.tsv")))
-[[ -f "$_SCAN_TMPDIR/p3_tools_lang.tsv" ]] && _pg_merged=$((_pg_merged + $(wc -l < "$_SCAN_TMPDIR/p3_tools_lang.tsv")))
-if (( _pg_merged > 0 )); then
-  log "  ${C_SUCCESS}✓${C_RESET}  Parallel groups complete: ${C_BOLD}%d items${C_RESET} found\n" "$_pg_merged"
 fi
 
 # ── C12: Orphaned Group Containers ──────────────────────────────────────
