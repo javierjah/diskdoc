@@ -449,9 +449,7 @@ save_history() {
 
 run_doctor() {
   echo ""
-  printf "  ${BOLD}${CYAN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}\n"
-  printf "  ${BOLD}${CYAN}┃           diskdoc doctor — Disk Diagnosis                   ┃${NC}\n"
-  printf "  ${BOLD}${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}\n"
+  printf "  "; draw_box "diskdoc doctor — Disk Diagnosis" "$C_INFO" 60
   echo ""
 
   local disk_line
@@ -711,10 +709,9 @@ interactive_select() {
 # ── Banner ───────────────────────────────────────────────────────────────────
 
 log "\n"
-log "  ${BOLD}${CYAN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}\n"
-log "  ${BOLD}${CYAN}┃              diskdoc v${VERSION}                                 ┃${NC}\n"
-log "  ${BOLD}${CYAN}┃          macOS Disk Cleanup CLI                              ┃${NC}\n"
-log "  ${BOLD}${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}\n"
+log "  "; draw_box "diskdoc v${VERSION}" "$C_INFO" 60 \
+  "macOS Disk Cleanup CLI" \
+  "${MACOS_CODENAME} (${MACOS_MAJOR}.${MACOS_MINOR})"
 log "\n"
 
 # ── Initial disk state ───────────────────────────────────────────────────────
@@ -1818,9 +1815,7 @@ PCT_FREE_BEFORE=$((DISK_AVAIL_BEFORE * 100 / DISK_TOTAL))
 PCT_FREE_AFTER=$((DISK_AVAIL_AFTER * 100 / DISK_TOTAL))
 
 echo ""
-echo -e "${BOLD}${CYAN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-echo -e "${BOLD}${CYAN}┃                      Final Report                          ┃${NC}"
-echo -e "${BOLD}${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
+draw_box "Final Report" "$C_INFO" 60
 echo ""
 echo -e "  ${DIM}Total disk .........${NC}  $(fmt "$DISK_TOTAL")"
 echo -e "  ${DIM}Free before ........${NC}  $(fmt "$DISK_AVAIL_BEFORE") (${PCT_FREE_BEFORE}%)"
