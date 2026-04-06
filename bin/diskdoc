@@ -628,9 +628,6 @@ if matches_profile "System"; then
     fi
   fi
 
-  # System logs
-  scan_target "System Logs" "/private/var/log" "System" "SAFE" "rm-sudo"
-
   # Category totals
   sys_count=0; sys_kb=0
   for ((i=0; i<${#T_CATS[@]}; i++)); do
@@ -861,7 +858,30 @@ if matches_profile "Personal" || [[ "$PROFILE" == "all" ]]; then
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# PHASE 4: Dynamic caches (~/Library/Caches/* > threshold)
+# PHASE: Logs & Diagnostics
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "Logs" || [[ "$PROFILE" == "all" ]] || [[ "$PROFILE" == "system" ]]; then
+  cat_header "Logs & Diagnostics" "$DIM"
+  logs_start=${#T_NAMES[@]}
+
+  scan_target "System Diagnostics"    "/private/var/db/diagnostics"                          "Logs" "SAFE" "rm-sudo"
+  scan_target "UUID Text Logs"        "/private/var/db/uuidtext"                             "Logs" "SAFE" "rm-sudo"
+  scan_target "System Logs (var)"     "/private/var/log"                                     "Logs" "SAFE" "rm-sudo"
+  scan_target "User Logs"             "$HOME/Library/Logs"                                   "Logs" "SAFE" "rm"
+  scan_target "System Diagnostic Rpt" "/Library/Logs/DiagnosticReports"                      "Logs" "SAFE" "rm-sudo"
+  scan_target "User Diagnostic Rpt"   "$HOME/Library/Logs/DiagnosticReports"                 "Logs" "SAFE" "rm"
+  scan_target "Crash Reporter"        "$HOME/Library/Application Support/CrashReporter"      "Logs" "SAFE" "rm"
+
+  logs_count=0; logs_kb=0
+  for ((i=logs_start; i<${#T_NAMES[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Logs" ]] && ((logs_count++)) && logs_kb=$((logs_kb + T_SIZES[$i]))
+  done
+  cat_footer "$logs_count" "$logs_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# PHASE: Dynamic caches (~/Library/Caches/* > threshold)
 # ════════════════════════════════════════════════════════════════════════════
 
 if matches_profile "Cache"; then
