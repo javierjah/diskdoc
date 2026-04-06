@@ -938,6 +938,33 @@ if matches_profile "App"; then
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
+# PHASE: Media (downloaded content — REBUILD risk)
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "App" || matches_profile "Media" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Media Downloads" "$BLUE"
+  media_start=${#T_NAMES[@]}
+
+  scan_target "Apple TV Cache"     "$HOME/Library/Containers/com.apple.TV/Data/Library/Caches"  "Media" "REBUILD" "rm"
+  scan_target "Apple TV Downloads" "$HOME/Movies/TV"                                            "Media" "REBUILD" "rm"
+  scan_target "Apple Music Media"  "$HOME/Music/Music/Media"                                    "Media" "REBUILD" "rm"
+  scan_target "Podcasts Data"      "$HOME/Library/Group Containers/243LU875E5.groups.com.apple.podcasts" "Media" "REBUILD" "rm"
+  scan_target "Apple Books Data"   "$HOME/Library/Containers/com.apple.BKAgentService"          "Media" "REBUILD" "rm"
+
+  # GarageBand / Logic / Final Cut
+  scan_target "GarageBand Data"    "$HOME/Library/Application Support/GarageBand"                "Media" "REBUILD" "rm"
+  scan_target "Logic Pro Data"     "$HOME/Library/Application Support/Logic"                     "Media" "REBUILD" "rm"
+  scan_target "Audio Libraries"    "$HOME/Library/Audio"                                         "Media" "REBUILD" "rm"
+  scan_target "FCP Renders"        "$HOME/Movies/Final Cut Pro Library/Renders"                  "Media" "REBUILD" "rm"
+
+  media_count=0; media_kb=0
+  for ((i=media_start; i<${#T_NAMES[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Media" ]] && ((media_count++)) && media_kb=$((media_kb + T_SIZES[$i]))
+  done
+  cat_footer "$media_count" "$media_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
 # PHASE: Personal Data (PERSONAL — report only, never auto-delete)
 # ════════════════════════════════════════════════════════════════════════════
 
