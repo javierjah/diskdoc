@@ -23,7 +23,7 @@
 # shellcheck disable=SC2059,SC2004
 set -uo pipefail
 
-VERSION="2.0.0"
+VERSION="3.0.0"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
