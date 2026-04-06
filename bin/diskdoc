@@ -105,11 +105,13 @@ What it cleans:
   Pkg Mgrs     npm, pnpm, yarn, pip, Homebrew
 
 Risk levels:
-  SAFE       Regenerates without effort (caches, build artifacts)
-  REBUILD    Costly to reconstruct (sound libraries, large downloads)
-  PERSONAL   User data — report only, never auto-deleted
+  SAFE        Regenerates without effort (caches, build artifacts)
+  REBUILD     Costly to reconstruct (sound libraries, large downloads)
+  PERSONAL    User data — report only, never auto-deleted
+  UNTOUCHABLE System-critical — shown for transparency, never deletable
 
-Items tagged PERSONAL are skipped in --auto mode.
+Items tagged PERSONAL and UNTOUCHABLE are skipped in --auto mode.
+UNTOUCHABLE items live in a separate section and cannot be selected.
 
 More info: https://github.com/javierjah/diskdoc
 HELP
@@ -246,7 +248,7 @@ matches_profile() {
   esac
 }
 
-# ── Result arrays ────────────────────────────────────────────────────────────
+# ── Result arrays (deletable items) ─────────────────────────────────────────
 declare -a T_NAMES=()
 declare -a T_PATHS=()
 declare -a T_SIZES=()
@@ -255,6 +257,13 @@ declare -a T_RISKS=()
 declare -a T_METHODS=()
 declare -a SELECTED=()
 FOUND_TOTAL=0
+
+# ── Untouchable arrays (report-only, NEVER deletable) ──────────────────────
+declare -a U_NAMES=()
+declare -a U_PATHS=()
+declare -a U_SIZES=()
+declare -a U_DESCS=()
+U_TOTAL=0
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -286,17 +295,40 @@ fmt() {
 has_cmd() { command -v "$1" &>/dev/null; }
 
 # ── Risk tags ───────────────────────────────────────────────────────────────
-# SAFE     — regenerates without effort (caches, build artifacts)
-# REBUILD  — costly to reconstruct (sound libraries, large downloads)
-# PERSONAL — user data, report only, never auto-delete
+# SAFE        — regenerates without effort (caches, build artifacts)
+# REBUILD     — costly to reconstruct (sound libraries, large downloads)
+# PERSONAL    — user data, report only, never auto-delete
+# UNTOUCHABLE — system-critical, never delete, report only with explanation
 
 risk_color() {
   case "$1" in
-    SAFE)     printf '%s' "$GREEN" ;;
-    REBUILD)  printf '%s' "$YELLOW" ;;
-    PERSONAL) printf '%s' "$MAGENTA" ;;
-    *)        printf '%s' "$NC" ;;
+    SAFE)        printf '%s' "$GREEN" ;;
+    REBUILD)     printf '%s' "$YELLOW" ;;
+    PERSONAL)    printf '%s' "$MAGENTA" ;;
+    UNTOUCHABLE) printf '%s' "$MAGENTA" ;;
+    *)           printf '%s' "$NC" ;;
   esac
+}
+
+# Add an untouchable item — populates U_* arrays, NEVER T_* arrays.
+# These items cannot be deleted by any code path.
+scan_untouchable_target() {
+  local name="$1" path="$2" desc="$3"
+  local kb=0
+
+  if [[ -e "$path" ]]; then
+    if sudo test -d "$path" 2>/dev/null; then
+      kb=$(sudo du -sk "$path" 2>/dev/null | awk '{print $1}')
+    elif sudo test -f "$path" 2>/dev/null; then
+      kb=$(sudo du -sk "$path" 2>/dev/null | awk '{print $1}')
+    fi
+  fi
+
+  U_NAMES+=("$name")
+  U_PATHS+=("$path")
+  U_SIZES+=("$kb")
+  U_DESCS+=("$desc")
+  U_TOTAL=$((U_TOTAL + kb))
 }
 
 # ── Scan helpers ─────────────────────────────────────────────────────────────
@@ -1552,16 +1584,16 @@ if [[ "$AUTO_MODE" == true ]]; then
   personal_skipped=0
   for ((i=0; i<${#SORTED[@]}; i++)); do
     auto_idx="${SORTED[$i]#*|}"
-    if [[ "${T_RISKS[$auto_idx]}" == "PERSONAL" ]]; then
+    if [[ "${T_RISKS[$auto_idx]}" == "PERSONAL" || "${T_RISKS[$auto_idx]}" == "UNTOUCHABLE" ]]; then
       SELECTED[$i]=0
       ((personal_skipped++)) || true
     else
       SELECTED[$i]=1
     fi
   done
-  echo -e "  ${YELLOW}Auto mode: proceeding with cleanup...${NC}"
+  echo -e "  ${YELLOW}Auto mode: proceeding with cleanup (SAFE items only)...${NC}"
   if (( personal_skipped > 0 )); then
-    echo -e "  ${DIM}Skipped ${personal_skipped} personal items (use interactive mode)${NC}"
+    echo -e "  ${DIM}Skipped ${personal_skipped} personal/untouchable items${NC}"
   fi
 else
   echo -e "  ${BOLD}Select items to delete:${NC}"
