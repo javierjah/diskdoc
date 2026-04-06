@@ -671,6 +671,51 @@ draw_box() {
   printf "${color}╰%s╯${C_RESET}\n" "$bline"
 }
 
+# ── TUI: Status bar + detail panel ───────────────────────────────────────────
+
+# Renders bottom status bar at current cursor position
+render_status_bar() {
+  local sel_count=$1 sel_kb=$2 total_count=$3 total_kb=$4
+  printf "  ${C_BOLD}Selected: %d items (%s)${C_RESET}  ${C_DIM}│${C_RESET}  ${C_DIM}Total found: %d items (%s)${C_RESET}\n" \
+    "$sel_count" "$(fmt "$sel_kb")" "$total_count" "$(fmt "$total_kb")"
+  printf "  ${C_DIM}↑↓ Navigate  ␣ Toggle  → Expand  ← Collapse  ⏎ Confirm  s Sort  / Search  q Quit${C_RESET}\n"
+}
+
+# Renders detail panel for highlighted item
+render_detail_panel() {
+  local idx=$1
+  local name="${T_NAMES[$idx]}"
+  local path="${T_PATHS[$idx]}"
+  local tag="${T_RISKS[$idx]}"
+  local cat="${T_CATS[$idx]}"
+  local kb="${T_SIZES[$idx]}"
+  local rc
+  rc=$(risk_color "$tag")
+
+  local size_str
+  size_str=$(fmt "$kb")
+
+  # Last modified
+  local mtime="unknown"
+  if [[ -e "$path" ]]; then
+    mtime=$(stat -f "%Sm" -t "%Y-%m-%d" "$path" 2>/dev/null || echo "unknown")
+  fi
+
+  local desc=""
+  case "$tag" in
+    SAFE)     desc="Regenerates without effort" ;;
+    REBUILD)  desc="Costly to reconstruct from backup" ;;
+    PERSONAL) desc="User data — shown for awareness only" ;;
+  esac
+
+  draw_box "$name" "$rc" "$((TERM_COLS > 70 ? 66 : TERM_COLS - 4))" \
+    "Risk: $(risk_icon "$tag") $tag — $desc" \
+    "Path: $path" \
+    "Size: $size_str" \
+    "Category: $cat" \
+    "Last modified: $mtime"
+}
+
 # ── Interactive selector ─────────────────────────────────────────────────────
 
 interactive_select() {
