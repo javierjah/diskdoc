@@ -584,6 +584,37 @@ risk_icon() {
   fi
 }
 
+# ── TUI: Braille spinner ─────────────────────────────────────────────────────
+
+SPINNER_FRAMES=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+SPINNER_PID=0
+
+# spinner_start "Scanning category..."
+# Runs in background, updates inline. Call spinner_stop to clear.
+spinner_start() {
+  local msg="$1"
+  [[ "$JSON_MODE" == true ]] && return
+  (
+    local i=0
+    while true; do
+      printf '\r\033[K  %s %s' "${SPINNER_FRAMES[$((i % 10))]}" "$msg" >&2
+      ((i++))
+      sleep 0.08
+    done
+  ) &
+  SPINNER_PID=$!
+  disown "$SPINNER_PID" 2>/dev/null
+}
+
+spinner_stop() {
+  if (( SPINNER_PID > 0 )); then
+    kill "$SPINNER_PID" 2>/dev/null
+    wait "$SPINNER_PID" 2>/dev/null || true
+    SPINNER_PID=0
+    printf '\r\033[K' >&2
+  fi
+}
+
 # ── TUI: Inline proportional bars ────────────────────────────────────────────
 
 # draw_bar value max_value width
