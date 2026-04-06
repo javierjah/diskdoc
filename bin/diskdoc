@@ -528,6 +528,96 @@ run_doctor() {
 [[ "$SHOW_HISTORY" == true ]] && show_history
 [[ "$DOCTOR_MODE" == true ]] && run_doctor
 
+# ── TUI: Terminal setup/cleanup ──────────────────────────────────────────────
+
+TERM_LINES=24
+TERM_COLS=80
+TUI_ACTIVE=false
+
+detect_term_size() {
+  local size
+  size=$(stty size 2>/dev/null) || return
+  TERM_LINES="${size%% *}"
+  TERM_COLS="${size##* }"
+}
+
+setup_tui() {
+  TUI_ACTIVE=true
+  detect_term_size
+  stty -echo -icanon 2>/dev/null
+  printf '\033[?25l'          # hide cursor
+  printf '\033[?1049h'        # alternate screen buffer
+  trap cleanup_tui EXIT INT TERM HUP
+  trap 'detect_term_size' WINCH
+}
+
+cleanup_tui() {
+  [[ "$TUI_ACTIVE" != true ]] && return
+  TUI_ACTIVE=false
+  printf '\033[?25h'          # show cursor
+  printf '\033[?1049l'        # restore main screen buffer
+  stty sane 2>/dev/null
+}
+
+# ── TUI: Emoji detection ────────────────────────────────────────────────────
+
+HAS_EMOJI=false
+if [[ "${LANG:-}" == *UTF-8* || "${LC_ALL:-}" == *UTF-8* || "${LC_CTYPE:-}" == *UTF-8* ]]; then
+  HAS_EMOJI=true
+fi
+
+risk_icon() {
+  if [[ "$HAS_EMOJI" == true ]]; then
+    case "$1" in
+      SAFE)        printf '🟢' ;;
+      REBUILD)     printf '🟡' ;;
+      PERSONAL)    printf '🔴' ;;
+      UNTOUCHABLE) printf '🔒' ;;
+      *)           printf ' ' ;;
+    esac
+  else
+    case "$1" in
+      SAFE)        printf "${C_SUCCESS}●${C_RESET}" ;;
+      REBUILD)     printf "${C_WARNING}●${C_RESET}" ;;
+      PERSONAL)    printf "${C_DANGER}●${C_RESET}" ;;
+      UNTOUCHABLE) printf "${C_ACCENT}■${C_RESET}" ;;
+      *)           printf ' ' ;;
+    esac
+  fi
+}
+
+# ── TUI: Generic box drawing ────────────────────────────────────────────────
+
+# draw_box title color width lines...
+# Usage: draw_box "My Title" "$C_INFO" 60 "line 1" "line 2" "line 3"
+draw_box() {
+  local title="$1" color="$2" width="$3"
+  shift 3
+
+  local inner=$((width - 2))
+  local title_len=${#title}
+  local pad=$((inner - title_len - 2))
+  (( pad < 0 )) && pad=0
+
+  local hline=""
+  for ((i=0; i<pad; i++)); do hline+="─"; done
+
+  printf "${color}╭─ %s ${C_RESET}${C_DIM}%s${C_RESET}${color}╮${C_RESET}\n" "$title" "$hline"
+
+  for line in "$@"; do
+    local line_len=${#line}
+    local rpad=$((inner - line_len))
+    (( rpad < 0 )) && rpad=0
+    local spaces=""
+    for ((i=0; i<rpad; i++)); do spaces+=" "; done
+    printf "${color}│${C_RESET} %s%s${color}│${C_RESET}\n" "$line" "$spaces"
+  done
+
+  local bline=""
+  for ((i=0; i<inner; i++)); do bline+="─"; done
+  printf "${color}╰%s╯${C_RESET}\n" "$bline"
+}
+
 # ── Interactive selector ─────────────────────────────────────────────────────
 
 interactive_select() {
