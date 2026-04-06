@@ -720,56 +720,154 @@ render_detail_panel() {
 
 interactive_select() {
   local num=${#SORTED[@]}
-  local cursor=0
-  local total_lines=$((num + 3))
 
+  # Build category tree structure
+  declare -a _tree_cat_order=()    # unique cats in order
+  declare -A _tree_cat_items=()    # cat → "sorted_idx1,sorted_idx2,..."
+  declare -A _tree_cat_kb=()       # cat → total kb
+  declare -A _tree_cat_collapsed=() # cat → 0/1
+  declare -A _tree_cat_max=()      # cat → max item kb (for bars)
+
+  for ((si=0; si<num; si++)); do
+    local real_idx="${SORTED[$si]#*|}"
+    local cat="${T_CATS[$real_idx]}"
+    if [[ -z "${_tree_cat_items[$cat]+x}" ]]; then
+      _tree_cat_order+=("$cat")
+      _tree_cat_items[$cat]=""
+      _tree_cat_kb[$cat]=0
+      _tree_cat_collapsed[$cat]=0
+      _tree_cat_max[$cat]=0
+    fi
+    if [[ -n "${_tree_cat_items[$cat]}" ]]; then
+      _tree_cat_items[$cat]+=","
+    fi
+    _tree_cat_items[$cat]+="$si"
+    _tree_cat_kb[$cat]=$(( ${_tree_cat_kb[$cat]} + T_SIZES[$real_idx] ))
+    (( T_SIZES[$real_idx] > _tree_cat_max[$cat] )) && _tree_cat_max[$cat]=${T_SIZES[$real_idx]}
+  done
+
+  # Select all by default
   for ((i=0; i<num; i++)); do SELECTED[$i]=1; done
 
+  # Build flat visible-row list
+  # Each row is "cat:CAT_NAME" or "item:SORTED_IDX"
+  build_visible_rows() {
+    _visible_rows=()
+    for cat in "${_tree_cat_order[@]}"; do
+      _visible_rows+=("cat:$cat")
+      if [[ "${_tree_cat_collapsed[$cat]}" == "0" ]]; then
+        IFS=',' read -ra items <<< "${_tree_cat_items[$cat]}"
+        for si in "${items[@]}"; do
+          _visible_rows+=("item:$si")
+        done
+      fi
+    done
+  }
+
+  declare -a _visible_rows=()
+  build_visible_rows
+  local cursor=0
+
+  # TUI setup
+  detect_term_size
   tput civis 2>/dev/null
-  stty -echo 2>/dev/null
-  trap 'tput cnorm 2>/dev/null; stty echo 2>/dev/null' EXIT INT TERM
+  stty -echo -icanon 2>/dev/null
+  trap 'tput cnorm 2>/dev/null; stty sane 2>/dev/null' EXIT INT TERM
 
-  draw_selector() {
-    [[ "${1:-}" == "redraw" ]] && printf '\033[%dA' "$total_lines"
+  draw_tree() {
+    # Move to top if redrawing
+    [[ "${1:-}" == "redraw" ]] && printf '\033[%dA' "$_last_draw_lines"
 
-    local sel_kb=0
-    local sel_count=0
-
+    local sel_kb=0 sel_count=0
     for ((i=0; i<num; i++)); do
-      local entry="${SORTED[$i]}"
-      local idx="${entry#*|}"
-      local name="${T_NAMES[$idx]}"
-      (( ${#name} > 30 )) && name="${name:0:27}..."
-      local sf
-      if [[ "${T_METHODS[$idx]}" == "tm-thin" ]]; then
-        sf="${TM_SNAP_COUNT} snaps"
-      else
-        sf=$(fmt "${T_SIZES[$idx]}")
-      fi
-      local tag="${T_RISKS[$idx]}"
-      local rc
-      rc=$(risk_color "$tag")
-
-      local check="[ ]"
       if [[ "${SELECTED[$i]}" == "1" ]]; then
-        check="[x]"
-        sel_kb=$((sel_kb + T_SIZES[$idx]))
+        local ri="${SORTED[$i]#*|}"
+        sel_kb=$((sel_kb + T_SIZES[$ri]))
         ((sel_count++)) || true
-      fi
-
-      if (( i == cursor )); then
-        printf "  ${BOLD}${CYAN}> ${check} %-30s %10s ${NC}${rc}%-8s${NC}\033[K\n" "$name" "$sf" "$tag"
-      else
-        printf "    ${check} %-30s %10s ${rc}%-8s${NC}\033[K\n" "$name" "$sf" "$tag"
       fi
     done
 
+    local drawn=0
+    for ((r=0; r<${#_visible_rows[@]}; r++)); do
+      local row="${_visible_rows[$r]}"
+      local row_type="${row%%:*}"
+      local row_val="${row#*:}"
+      local is_cursor=""
+      (( r == cursor )) && is_cursor=">"
+
+      if [[ "$row_type" == "cat" ]]; then
+        local cat="$row_val"
+        local arrow
+        [[ "${_tree_cat_collapsed[$cat]}" == "0" ]] && arrow="▼" || arrow="▶"
+        local cat_size
+        cat_size=$(fmt "${_tree_cat_kb[$cat]}")
+        # Count items in category
+        IFS=',' read -ra _citems <<< "${_tree_cat_items[$cat]}"
+        local ccount=${#_citems[@]}
+
+        if [[ -n "$is_cursor" ]]; then
+          printf "  ${C_BOLD}${C_INFO}%s %s %s${C_RESET}  ${C_DIM}(%s, %d items)${C_RESET}\033[K\n" \
+            "$is_cursor" "$arrow" "$cat" "$cat_size" "$ccount"
+        else
+          printf "  ${C_BOLD}  %s %s${C_RESET}  ${C_DIM}(%s, %d items)${C_RESET}\033[K\n" \
+            "$arrow" "$cat" "$cat_size" "$ccount"
+        fi
+      else
+        local si="$row_val"
+        local ri="${SORTED[$si]#*|}"
+        local name="${T_NAMES[$ri]}"
+        (( ${#name} > 28 )) && name="${name:0:25}..."
+        local sf
+        if [[ "${T_METHODS[$ri]}" == "tm-thin" ]]; then
+          sf="${TM_SNAP_COUNT} snaps"
+        else
+          sf=$(fmt "${T_SIZES[$ri]}")
+        fi
+        local tag="${T_RISKS[$ri]}"
+        local rc
+        rc=$(risk_color "$tag")
+        local icon
+        icon=$(risk_icon "$tag")
+        local cat="${T_CATS[$ri]}"
+        local bar
+        bar=$(draw_bar "${T_SIZES[$ri]}" "${_tree_cat_max[$cat]}" 8)
+
+        local check="[ ]"
+        [[ "${SELECTED[$si]}" == "1" ]] && check="[x]"
+
+        if [[ -n "$is_cursor" ]]; then
+          printf "  ${C_BOLD}${C_INFO}>   ${check}${C_RESET} %-28s %10s %s %s ${rc}${C_BOLD}%-8s${C_RESET}\033[K\n" \
+            "$name" "$sf" "$bar" "$icon" "$tag"
+        else
+          printf "      ${check} %-28s %10s %s %s ${rc}%-8s${C_RESET}\033[K\n" \
+            "$name" "$sf" "$bar" "$icon" "$tag"
+        fi
+      fi
+      ((drawn++))
+    done
+
+    # Status bar
     printf "\033[K\n"
-    printf "  ${BOLD}Selected: ${sel_count}/${num} items — $(fmt $sel_kb)${NC}\033[K\n"
-    printf "  ${DIM}↑↓=move  space=toggle  a=all  n=none  enter=confirm  q=cancel${NC}\033[K\n"
+    printf "  ${C_BOLD}Selected: %d/%d items — %s${C_RESET}\033[K\n" "$sel_count" "$num" "$(fmt $sel_kb)"
+    printf "  ${C_DIM}↑↓ move  ␣ toggle  →/← expand/collapse  A all  N none  ⏎ confirm  q quit${C_RESET}\033[K\n"
+    drawn=$((drawn + 3))
+
+    # Detail panel for current item (only if cursor is on an item)
+    local crow="${_visible_rows[$cursor]}"
+    if [[ "${crow%%:*}" == "item" ]]; then
+      local csi="${crow#*:}"
+      local cri="${SORTED[$csi]#*|}"
+      printf "\033[K\n"
+      printf "  "; render_detail_panel "$cri"
+      # Count lines in detail panel (box title + 5 content lines + bottom = 7)
+      drawn=$((drawn + 8))
+    fi
+
+    _last_draw_lines=$drawn
   }
 
-  draw_selector
+  local _last_draw_lines=0
+  draw_tree
 
   while true; do
     IFS= read -rsn1 key
@@ -777,15 +875,60 @@ interactive_select() {
       $'\x1b')
         read -rsn2 seq
         case "$seq" in
-          '[A') (( cursor > 0 )) && ((cursor--)) ;;
-          '[B') (( cursor < num - 1 )) && ((cursor++)) ;;
+          '[A') # Up
+            (( cursor > 0 )) && ((cursor--))
+            ;;
+          '[B') # Down
+            (( cursor < ${#_visible_rows[@]} - 1 )) && ((cursor++))
+            ;;
+          '[C') # Right — expand category
+            local crow="${_visible_rows[$cursor]}"
+            if [[ "${crow%%:*}" == "cat" ]]; then
+              _tree_cat_collapsed["${crow#*:}"]=0
+              build_visible_rows
+            fi
+            ;;
+          '[D') # Left — collapse category
+            local crow="${_visible_rows[$cursor]}"
+            if [[ "${crow%%:*}" == "cat" ]]; then
+              _tree_cat_collapsed["${crow#*:}"]=1
+              build_visible_rows
+            elif [[ "${crow%%:*}" == "item" ]]; then
+              # Find parent category and collapse it
+              local csi="${crow#*:}"
+              local cri="${SORTED[$csi]#*|}"
+              local ccat="${T_CATS[$cri]}"
+              _tree_cat_collapsed["$ccat"]=1
+              build_visible_rows
+              # Move cursor to the category header
+              for ((r=0; r<${#_visible_rows[@]}; r++)); do
+                [[ "${_visible_rows[$r]}" == "cat:$ccat" ]] && { cursor=$r; break; }
+              done
+            fi
+            ;;
         esac
         ;;
-      ' ')
-        if [[ "${SELECTED[$cursor]}" == "1" ]]; then
-          SELECTED[$cursor]=0
-        else
-          SELECTED[$cursor]=1
+      ' ') # Toggle
+        local crow="${_visible_rows[$cursor]}"
+        if [[ "${crow%%:*}" == "item" ]]; then
+          local csi="${crow#*:}"
+          if [[ "${SELECTED[$csi]}" == "1" ]]; then
+            SELECTED[$csi]=0
+          else
+            SELECTED[$csi]=1
+          fi
+        elif [[ "${crow%%:*}" == "cat" ]]; then
+          # Toggle all items in category
+          local ccat="${crow#*:}"
+          IFS=',' read -ra _citems <<< "${_tree_cat_items[$ccat]}"
+          # Check if all selected — if so, deselect all; otherwise select all
+          local all_sel=true
+          for csi in "${_citems[@]}"; do
+            [[ "${SELECTED[$csi]}" != "1" ]] && all_sel=false && break
+          done
+          local new_val=1
+          $all_sel && new_val=0
+          for csi in "${_citems[@]}"; do SELECTED[$csi]=$new_val; done
         fi
         ;;
       'a'|'A') for ((i=0; i<num; i++)); do SELECTED[$i]=1; done ;;
@@ -793,17 +936,17 @@ interactive_select() {
       ''|$'\n') break ;;
       'q'|'Q')
         tput cnorm 2>/dev/null
-        stty echo 2>/dev/null
+        stty sane 2>/dev/null
         echo ""
-        printf "  ${DIM}Cancelled. Nothing was deleted.${NC}\n"
+        printf "  ${C_DIM}Cancelled. Nothing was deleted.${C_RESET}\n"
         exit 0
         ;;
     esac
-    draw_selector "redraw"
+    draw_tree "redraw"
   done
 
   tput cnorm 2>/dev/null
-  stty echo 2>/dev/null
+  stty sane 2>/dev/null
 }
 
 # ── Banner ───────────────────────────────────────────────────────────────────
