@@ -33,22 +33,39 @@ fi
 
 VERSION="3.0.0"
 
-# ── Colors ───────────────────────────────────────────────────────────────────
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-DIM='\033[2m'
-NC='\033[0m'
+# ── Colors (16 ANSI standard — adapts to any terminal theme) ────────────────
+# Semantic names: use these, not raw color names
+C_SUCCESS='\033[32m'    # green — SAFE, OK
+C_WARNING='\033[33m'    # yellow — REBUILD, caution
+C_DANGER='\033[31m'     # red — PERSONAL, critical
+C_INFO='\033[36m'       # cyan — categories, info
+C_MUTED='\033[90m'      # bright black (gray) — secondary text
+C_ACCENT='\033[35m'     # magenta — UNTOUCHABLE, highlights
+C_BLUE='\033[34m'       # blue — media, pkg managers
+C_BOLD='\033[1m'
+C_DIM='\033[2m'
+C_RESET='\033[0m'
+
+# Legacy aliases (used throughout existing code — will migrate incrementally)
+RED="$C_DANGER"
+GREEN="$C_SUCCESS"
+YELLOW="$C_WARNING"
+CYAN="$C_INFO"
+MAGENTA="$C_ACCENT"
+BLUE="$C_BLUE"
+BOLD="$C_BOLD"
+DIM="$C_DIM"
+NC="$C_RESET"
 
 disable_colors() {
+  C_SUCCESS='' C_WARNING='' C_DANGER='' C_INFO='' C_MUTED='' C_ACCENT=''
+  C_BLUE='' C_BOLD='' C_DIM='' C_RESET=''
   RED='' GREEN='' YELLOW='' CYAN='' MAGENTA='' BLUE='' BOLD='' DIM='' NC=''
 }
 
-# Disable colors if not a terminal
+# Respect NO_COLOR (https://no-color.org)
+[[ -n "${NO_COLOR:-}" ]] && disable_colors
+# Disable colors if not a terminal (piped output)
 [[ ! -t 1 ]] && disable_colors
 
 # ── Flags ────────────────────────────────────────────────────────────────────
@@ -302,11 +319,11 @@ has_cmd() { command -v "$1" &>/dev/null; }
 
 risk_color() {
   case "$1" in
-    SAFE)        printf '%s' "$GREEN" ;;
-    REBUILD)     printf '%s' "$YELLOW" ;;
-    PERSONAL)    printf '%s' "$MAGENTA" ;;
-    UNTOUCHABLE) printf '%s' "$MAGENTA" ;;
-    *)           printf '%s' "$NC" ;;
+    SAFE)        printf '%s' "$C_SUCCESS" ;;
+    REBUILD)     printf '%s' "$C_WARNING" ;;
+    PERSONAL)    printf '%s' "$C_DANGER" ;;
+    UNTOUCHABLE) printf '%s' "$C_ACCENT" ;;
+    *)           printf '%s' "$C_RESET" ;;
   esac
 }
 
