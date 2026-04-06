@@ -15,9 +15,12 @@ macOS silently fills your disk with things you never asked for:
 - **`com.apple.idleassetsd`** — Apple's screensaver daemon downloads aerial videos to a hidden system folder. It can grow to **100GB+** without any notification, any setting, any warning. There is no UI to see it. There is no UI to delete it. It just eats your disk until you can't work.
 - **Apple Intelligence & ML models** — macOS downloads large machine learning models for Siri, dictation, translation, and Apple Intelligence features. They sit in hidden system directories and grow over time.
 - **APFS local snapshots** — Time Machine creates local snapshots that can consume tens of gigabytes. macOS never tells you they exist or how to reclaim the space.
+- **Parallels, VMware, UTM** — virtual machines that silently grow their disk images to hundreds of gigabytes. Each VM is a single opaque file that Finder won't explain.
 - **Docker, Xcode, Android Studio** — dev tools that accumulate build caches, simulators, and volumes until they consume more space than your actual projects.
 - **App caches** — Spotify, Chrome, Slack, ChatGPT, Claude, Telegram — every app caches aggressively and none of them clean up after themselves.
 - **Ghost app data** — you uninstalled the app, but its caches and containers are still on your disk, invisible, taking up space for nothing.
+- **`dyld shared cache`** — 6-10 GB of "cache" that isn't a cache at all. It's part of the OS. You can't delete it. Apple named it "cache" anyway.
+- **`sleepimage`** — a file the exact size of your RAM (8-96 GB) sitting in `/private/var/vm/`. Apple never mentions it exists.
 - **node_modules / Rust targets** — if you're a developer, you have dozens of copies of the same packages and build artifacts scattered across forgotten projects.
 
 None of this shows up in Finder. None of it shows up in "Storage Management." The space just disappears, and Apple's answer is: buy more.
@@ -32,6 +35,8 @@ None of this shows up in Finder. None of it shows up in "Storage Management." Th
 brew tap javierjah/diskdoc
 brew install diskdoc
 ```
+
+> **Note:** diskdoc v3 requires bash 4+. macOS ships bash 3.2 from 2007 because Apple refuses to update it due to GPLv3 licensing. `brew install bash` fixes this.
 
 ### Quick install
 
@@ -56,7 +61,7 @@ diskdoc
 # Preview only — see what's eating your disk
 diskdoc --scan
 
-# Full audit report — includes personal data categories
+# Full audit report — includes personal data and untouchable items
 diskdoc --report
 
 # Deep scan for dev build artifacts (node_modules, target/, build/)
@@ -83,8 +88,8 @@ diskdoc history
 | Flag | Description |
 |------|-------------|
 | `--scan` | Scan only, don't delete anything |
-| `--report` | Full audit tree with all categories including personal data |
-| `--auto` | Clean without asking (skips PERSONAL items automatically) |
+| `--report` | Full audit tree with all categories including personal and untouchable |
+| `--auto` | Clean without asking (skips PERSONAL and UNTOUCHABLE automatically) |
 | `--dry-run` | Show what would be deleted (with commands) |
 | `--dev-artifacts` | Deep scan for build artifacts across code directories |
 | `--json` | Output scan results as JSON (implies `--scan`) |
@@ -101,20 +106,21 @@ Every item scanned by `diskdoc` is tagged with a risk level:
 | Tag | Color | Meaning |
 |-----|-------|---------|
 | **SAFE** | Green | Caches and regenerable data. Delete without worry. |
-| **REBUILD** | Yellow | Costly to reconstruct — large downloads, sound libraries, ML models. Safe to delete but will take time to re-download. |
-| **PERSONAL** | Magenta | User data — Mail, Messages, Photos, iCloud. Shown in `--report` mode but **never auto-deleted**. |
+| **REBUILD** | Yellow | Costly to reconstruct — large downloads, VM images, sound libraries. Safe to delete but will take time to re-download. |
+| **PERSONAL** | Red | User data — Mail, Messages, Photos, browser history. Shown in `--report` mode but **never auto-deleted**. |
+| **UNTOUCHABLE** | Magenta | System-critical. Cannot be safely deleted. Shown for transparency with educational explanations. **Never deletable by any code path.** |
 
-In `--auto` mode, PERSONAL items are automatically skipped. In interactive mode, they appear with a visible warning so you can make an informed choice.
+In `--auto` mode, PERSONAL and UNTOUCHABLE items are automatically skipped. In interactive mode, PERSONAL items appear with a visible warning. UNTOUCHABLE items live in a separate section and cannot be selected.
 
 ### Profiles
 
 Filter the scan to only what you care about:
 
 - **`all`** — Everything (default)
-- **`dev`** — Dev tools + package managers + node_modules + Rust targets
-- **`system`** — System caches + logs + Trash
-- **`apps`** — Application data (Docker, Claude, ChatGPT, etc.)
-- **`personal`** — Personal data (Mail, Messages, Photos, iCloud)
+- **`dev`** — Dev tools + package managers + build artifacts
+- **`system`** — System caches + logs + Trash + /var/folders + Spotlight
+- **`apps`** — Application data, media, virtualization, browsers, creative tools, mail
+- **`personal`** — Personal data (Mail DB, Messages, iCloud, Photos, browser data)
 
 ```bash
 # Only scan dev-related items
@@ -141,39 +147,61 @@ Excluded items show up as `⊘ excluded` during scans.
 
 ### Interactive Selection
 
-`diskdoc` doesn't just dump a list and ask "delete all?" — it gives you full control:
+`diskdoc` gives you full control with collapsible category trees:
 
 ```
-  > [x] ★ APFS Local Snapshots (3 snaps)            —      SAFE
-    [x] Apple Screensavers (idleassetsd)        99.2 GB    SAFE
-    [x] Docker Data                              30.1 GB    SAFE
-    [ ] Android SDK                              25.0 GB    REBUILD  <- deselected
-    [x] iOS Simulators                           11.0 GB    SAFE
-    [x] Cache: com.spotify.client                 6.8 GB    SAFE
+  ▼ System (105.4 GB)                                              4 items
+    > [x] ★ APFS Local Snapshots (3 snaps)            —      SAFE
+      [x] Apple Screensavers (idleassetsd)        99.2 GB    SAFE
+      [x] System Logs                              4.1 GB    SAFE
+      [x] Trash                                    2.1 GB    SAFE
+  ▼ Virtualization (82.3 GB)                                        3 items
+      [x] Parallels: Windows 11.pvm               45.0 GB    REBUILD
+      [x] Docker.raw (sparse)                      30.1 GB    SAFE
+      [ ] UTM: Ubuntu.utm                           7.2 GB    REBUILD  <- deselected
+  ► Dev Tools (25.0 GB)                                             8 items  [collapsed]
 
-  Selected: 4/6 items — 147.1 GB
-  arrows=move  space=toggle  a=all  n=none  enter=confirm  q=cancel
+  Selected: 6/15 items — 180.5 GB
+  ↑↓ Navigate  ␣ Toggle  → Expand  ← Collapse  ⏎ Confirm  q Quit
 ```
 
-Items with ★ are highlighted — they require special attention (like APFS snapshots or iOS backups that need `sudo`).
+Navigate with arrow keys. Space toggles items. Left/right collapses/expands categories. Space on a category toggles all its items.
 
 ### Report Mode
 
-`diskdoc --report` gives you a complete audit of everything on your disk, organized by category:
+`diskdoc --report` gives you a complete audit of everything on your disk, organized by category with proportional bars:
 
 ```
   System  (105.4 GB)
-  ├── Apple Screensavers (idleassetsd)        99.2 GB  SAFE
-  ├── System Logs                              4.1 GB  SAFE
-  └── Trash                                    2.1 GB  SAFE
+  ├── Apple Screensavers (idleassetsd)  99.2 GB  ████████░░  🟢 SAFE
+  ├── System Logs                        4.1 GB  ░░░░░░░░░░  🟢 SAFE
+  └── Trash                              2.1 GB  ░░░░░░░░░░  🟢 SAFE
+
+  Virtualization  (82.3 GB)
+  ├── Parallels: Windows 11.pvm         45.0 GB  █████░░░░░  🟡 REBUILD
+  └── Docker.raw (sparse)               30.1 GB  ███░░░░░░░  🟢 SAFE
 
   Personal  (8.2 GB)
-  ├── Mail Downloads                           3.1 GB  PERSONAL
-  ├── Messages Attachments                     2.8 GB  PERSONAL
-  └── iCloud Drive Cache                       2.3 GB  PERSONAL
+  ├── Mail Database (V10)                3.1 GB  ████░░░░░░  🔴 PERSONAL
+  ├── Messages Attachments               2.8 GB  ███░░░░░░░  🔴 PERSONAL
+  └── iCloud Drive (local)               2.3 GB  ██░░░░░░░░  🔴 PERSONAL
+
+  ╭─ 🔒 Untouchable — Apple's territory ─────────────────────╮
+  │ Total: 34.8 GB — none of this can be safely removed      │
+  ╰──────────────────────────────────────────────────────────╯
+  🔒 dyld shared cache                6.2 GB
+  🔒 Rosetta 2 AOT cache              4.1 GB
+  🔒 sleepimage                       16.0 GB
+  🔒 Swap files                        4.0 GB
+  🔒 macOS Update packages             4.3 GB
+  🔒 StagedFrameworks                  0.2 GB
+
+  These exist because of decisions Apple made about how
+  macOS works. diskdoc shows them for transparency, but
+  will never delete them.
 ```
 
-Report mode includes PERSONAL categories for full visibility. Nothing is deleted — it's pure auditing.
+Report mode includes PERSONAL and UNTOUCHABLE categories for full visibility. Nothing is deleted.
 
 ### Ghost Apps
 
@@ -184,7 +212,24 @@ Report mode includes PERSONAL categories for full visibility. Nothing is deleted
   Ghost: com.another.removed                    1.3 GB    SAFE
 ```
 
-It checks both `/Applications` and Spotlight to confirm the app is truly gone before flagging its data.
+It checks `/Applications`, `~/Applications`, `/System/Applications`, and Spotlight to confirm the app is truly gone before flagging its data.
+
+### Virtualization
+
+`diskdoc` scans every major virtualization platform and reports each VM individually:
+
+```
+  Parallels: Windows 11.pvm             45.0 GB    REBUILD
+  Parallels: macOS Ventura.macvm        22.1 GB    REBUILD
+  VMware: Ubuntu Server.vmwarevm        18.5 GB    REBUILD
+  UTM: Fedora 39.utm                     8.2 GB    REBUILD
+  Docker.raw (sparse: 30.1 GB on disk)  60.0 GB    SAFE
+  OrbStack data (sparse)                12.4 GB    SAFE
+  Lima: default                          5.1 GB    REBUILD
+  Tart VM: sonoma-vanilla                4.8 GB    REBUILD
+```
+
+Docker.raw and OrbStack use sparse files — `diskdoc` reports actual disk usage (via `du`), not the virtual size that Finder shows.
 
 ### APFS Snapshots
 
@@ -195,6 +240,19 @@ Time Machine creates local APFS snapshots that can silently consume significant 
 ```
 
 Snapshot cleanup uses `tmutil thinlocalsnapshots` — the safe, Apple-sanctioned way to reclaim this space.
+
+### Untouchable Items
+
+`diskdoc` shows you everything — including the things you can't delete. The **Untouchable** section reports system-critical items with educational explanations:
+
+- **dyld shared cache** (6-10 GB) — Not actually a cache. Contains all macOS dynamic libraries. Deleting it = system won't boot.
+- **Rosetta 2 AOT cache** (2-7 GB) — Translated Intel binaries for Apple Silicon. Regenerates automatically.
+- **sleepimage** (= your RAM) — Memory dump for deep hibernation. Can be disabled but you lose hibernate.
+- **Swap files** (1-4+ GB) — Virtual memory. Deleting while running = kernel panic.
+- **/Library/Updates** (0-13 GB) — Pending macOS updates. SIP-protected.
+- **StagedFrameworks** — Rosetta framework translations. SIP-protected.
+
+These exist because of decisions Apple made. `diskdoc` shows them for transparency but will never offer to delete them.
 
 ### Doctor Mode
 
@@ -209,39 +267,48 @@ Snapshot cleanup uses `tmutil thinlocalsnapshots` — the safe, Apple-sanctioned
 
 Every cleanup is logged to `~/.diskdoc/history.log`. Run `diskdoc history` to see a table of past cleanups with date, recovered space, items cleaned, and elapsed time.
 
-## What It Cleans
+## What It Scans
 
 | Category | Examples | Risk |
 |----------|----------|------|
-| **System** | Apple screensaver cache, Trash, APFS snapshots | SAFE |
+| **System** | Apple screensaver cache, Trash, APFS snapshots, QuickLook/font caches | SAFE |
 | **Apple Intelligence** | ML models, asset packs, translation models | SAFE |
-| **Logs** | System logs, diagnostic reports, crash logs | SAFE |
-| **Dev Tools** | Xcode DerivedData/Archives/Simulators, Android SDK, CocoaPods, Gradle | SAFE |
-| **Dev Toolchains** | Rust (cargo/registry/target), Go modules, Java/Maven/Gradle, Flutter, Python (pip/conda), Ruby gems, Android NDK, JetBrains caches, VS Code extensions | SAFE |
+| **Logs** | System logs, diagnostic reports, crash logs, /var/folders temp | SAFE |
+| **Virtualization** | Parallels, VMware, UTM, Lima, Colima, OrbStack, Tart, Vagrant, VirtualBox, Multipass, Docker.raw | REBUILD |
+| **Dev Tools** | Xcode, Android SDK, CocoaPods, Gradle, Go, Rust, Python, Ruby, Flutter, JetBrains, VS Code, Unity, Unreal, Bazel | SAFE |
 | **Build Artifacts** | node_modules, Rust `target/`, build dirs (via `--dev-artifacts`) | SAFE |
-| **App Data** | Docker, Claude, ChatGPT, Kiro, Windsurf, Cursor | SAFE |
-| **Electron Apps** | Sandbox containers for Electron-based apps | SAFE |
+| **App Data** | Docker, Claude, ChatGPT, Kiro, Windsurf, Cursor, Slack, Discord, Notion | SAFE |
+| **Browsers** | Chromium browsers (multi-profile), Safari, Firefox | SAFE |
+| **Browser Data** | IndexedDB, LocalStorage, History, bookmarks | PERSONAL |
+| **Creative** | Adobe CC, Lightroom, DaVinci Resolve | SAFE/REBUILD |
+| **Mail** | Mail database (V6-V10), downloads, sync logs | PERSONAL |
+| **Media** | Apple TV, Music, Podcasts, Books, GarageBand, Logic, Final Cut Pro | REBUILD |
 | **Caches** | Any `~/Library/Caches/*` entry over the size threshold | SAFE |
-| **Pkg Managers** | npm, pnpm, yarn, pip, Homebrew | SAFE |
-| **Media** | GarageBand, Logic Pro, Final Cut Pro sound libraries and render files | REBUILD |
-| **Personal** | Mail downloads, Messages attachments, iCloud Drive cache, Photos library faces/derivatives | PERSONAL |
+| **Pkg Managers** | npm, pnpm, yarn, pip, Homebrew, Caskroom | SAFE |
 | **Ghost Apps** | Caches and containers from uninstalled applications | SAFE |
+| **Orphan Containers** | Group Containers from apps no longer installed | SAFE |
+| **Personal** | Messages attachments, iCloud Drive cache, Photos derivatives | PERSONAL |
+| **Untouchable** | dyld cache, Rosetta 2, sleepimage, swap, Updates, StagedFrameworks | UNTOUCHABLE |
 
-Everything tagged SAFE or REBUILD is a cache, build artifact, or regenerable data. **PERSONAL items are never auto-deleted** — they only appear in `--report` mode and interactive mode with clear warnings.
+Everything tagged SAFE or REBUILD is a cache, build artifact, or regenerable data. **PERSONAL items are never auto-deleted.** **UNTOUCHABLE items are never deletable by any code path** — they exist for transparency.
 
 ## How It Works
 
-1. Scans known space hogs (idleassetsd, Docker, Xcode, Android, ML models, etc.)
-2. Detects APFS local snapshots and highlights them with ★
-3. Dynamically scans `~/Library/Caches/*` for anything over the size threshold
-4. Finds `node_modules` and Rust `target/` directories across your code directories
-5. Scans Electron and sandbox containers, deduplicating already-known entries
-6. Detects ghost app data — caches from apps you already uninstalled
-7. Presents a sorted, color-coded table with categories, risk levels, and ★ highlights
-8. Interactive selector — pick exactly what to delete
-9. Uses official cleanup commands where available (`tmutil`, `xcrun simctl`, `docker system prune`, `qlmanage`)
-10. Cleans and shows a before/after report with progress bars
-11. Saves cleanup to history log
+1. Detects macOS version (Catalina through Tahoe) for version-aware scanning
+2. Scans known space hogs (idleassetsd, Docker, Xcode, VMs, ML models, etc.)
+3. Scans every major virtualization platform, reporting each VM individually
+4. Detects APFS local snapshots and highlights them with ★
+5. Dynamically scans `~/Library/Caches/*` for anything over the size threshold
+6. Finds `node_modules` and Rust `target/` directories across your code directories
+7. Scans all browser profiles (Chromium multi-profile, Safari, Firefox)
+8. Scans Electron and sandbox containers, deduplicating already-known entries
+9. Detects ghost app data — caches from apps you already uninstalled
+10. Reports untouchable system items with educational explanations
+11. Presents a sorted, color-coded table with categories, risk levels, proportional bars, and ★ highlights
+12. Interactive selector with collapsible category trees — pick exactly what to delete
+13. Uses official cleanup commands where available (`tmutil`, `xcrun simctl`, `docker system prune`, `qlmanage`, `mdutil`)
+14. Cleans and shows a before/after report with progress bars
+15. Saves cleanup to history log
 
 No dependencies. No runtime. Just a bash script that does what macOS refuses to.
 
@@ -261,6 +328,9 @@ diskdoc --json | jq '.total_recoverable_bytes'
 
 # Only PERSONAL items
 diskdoc --json | jq '.items[] | select(.risk == "PERSONAL")'
+
+# Untouchable items and why
+diskdoc --json | jq '.untouchable[] | {name, size_human, description}'
 ```
 
 ## Origin Story
@@ -290,8 +360,8 @@ One person built this. No company. No funding. No agenda beyond: **your disk spa
 ## Requirements
 
 - macOS (tested on Sonoma and Sequoia)
-- Bash 3.2+ (ships with macOS)
-- `sudo` access (for scanning system directories like idleassetsd and logs)
+- Bash 4+ (`brew install bash` — macOS ships bash 3.2 from 2007 because Apple refuses to update due to GPLv3)
+- `sudo` access (for scanning system directories like idleassetsd, logs, and untouchable items)
 
 ## Contributing
 
