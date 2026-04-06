@@ -984,6 +984,12 @@ if matches_profile "Personal" || [[ "$PROFILE" == "all" ]]; then
   scan_target "Messages Attachments"  "$HOME/Library/Messages/Attachments"                                  "Personal" "PERSONAL" "rm"
   scan_target "Messages Database"     "$HOME/Library/Messages"                                              "Personal" "PERSONAL" "rm"
 
+  # iCloud Drive local cache
+  scan_target "iCloud Drive (local)"  "$HOME/Library/Mobile Documents"                                      "Personal" "PERSONAL" "rm"
+
+  # Photos Library derivatives (face recognition cache — takes hours to rebuild)
+  scan_target "Photos Derivatives"    "$HOME/Pictures/Photos Library.photoslibrary/resources"                "Personal" "PERSONAL" "rm"
+
   personal_count=0; personal_kb=0
   for ((i=personal_start; i<${#T_NAMES[@]}; i++)); do
     [[ "${T_CATS[$i]}" == "Personal" ]] && ((personal_count++)) && personal_kb=$((personal_kb + T_SIZES[$i]))
@@ -1006,6 +1012,14 @@ if matches_profile "Logs" || [[ "$PROFILE" == "all" ]] || [[ "$PROFILE" == "syst
   scan_target "System Diagnostic Rpt" "/Library/Logs/DiagnosticReports"                      "Logs" "SAFE" "rm-sudo"
   scan_target "User Diagnostic Rpt"   "$HOME/Library/Logs/DiagnosticReports"                 "Logs" "SAFE" "rm"
   scan_target "Crash Reporter"        "$HOME/Library/Application Support/CrashReporter"      "Logs" "SAFE" "rm"
+
+  # QuickLook and font caches
+  ql_cache_dir=$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null || true)
+  if [[ -n "$ql_cache_dir" ]]; then
+    scan_target "QuickLook Thumbnails" "${ql_cache_dir}com.apple.QuickLook.thumbnailcache" "Logs" "SAFE" "qlmanage-reset"
+  fi
+  scan_target "Font ATS Cache"       "/Library/Caches/com.apple.ATS"                          "Logs" "SAFE" "rm-sudo"
+  scan_target "Font Registry Cache"  "$HOME/Library/Caches/com.apple.FontRegistry"            "Logs" "SAFE" "rm"
 
   logs_count=0; logs_kb=0
   for ((i=logs_start; i<${#T_NAMES[@]}; i++)); do
@@ -1253,6 +1267,7 @@ if [[ "$DRY_RUN" == true ]]; then
       brew-cleanup) cmd="brew cleanup --prune=all" ;;
       tm-thin)      cmd="sudo tmutil thinlocalsnapshots / 99999999999" ;;
       xcrun-sim)    cmd="xcrun simctl delete unavailable" ;;
+      qlmanage-reset) cmd="qlmanage -r cache && rm -rf \"$path\"" ;;
     esac
 
     printf "  ${DIM}[%2d]${NC} %-36s  ${DIM}%s${NC}\n" "$idx" "$name" "$cmd"
@@ -1369,6 +1384,9 @@ for entry in "${SORTED[@]}"; do
       ;;
     xcrun-sim)
       xcrun simctl delete unavailable &>/dev/null && ok=true
+      ;;
+    qlmanage-reset)
+      qlmanage -r cache &>/dev/null && rm -rf "$path" 2>/dev/null && ok=true
       ;;
   esac
 
