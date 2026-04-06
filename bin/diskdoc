@@ -1832,6 +1832,185 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   cat_footer "$vm_count" "$vm_kb"
 fi
 
+# ── A5: Docker.raw — the single giant file ─────────────────────────────────
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  local _docker_raw="$HOME/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"
+  if [[ -f "$_docker_raw" ]]; then
+    log "\r\033[K  │  ${C_DIM}…${C_RESET}  %-44s" "Docker.raw"
+    # CRITICAL: use du for sparse file, never ls
+    local docker_raw_kb
+    docker_raw_kb=$(du -sk "$_docker_raw" 2>/dev/null | awk '{print $1}')
+    docker_raw_kb=${docker_raw_kb:-0}
+    if (( docker_raw_kb > MIN_SIZE_KB )); then
+      T_NAMES+=("Docker.raw (all images/volumes)")
+      T_PATHS+=("__docker_prune__")
+      T_SIZES+=("$docker_raw_kb")
+      T_CATS+=("Virtualization")
+      T_RISKS+=("SAFE")
+      T_METHODS+=("docker-prune")
+      FOUND_TOTAL=$((FOUND_TOTAL + docker_raw_kb))
+      log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "Docker.raw (all images/volumes)" "$(fmt "$docker_raw_kb")"
+    else
+      log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "Docker.raw"
+    fi
+  fi
+fi
+
+# ── A6-A8: Creative tools caches ───────────────────────────────────────────
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Creative Tools" "$MAGENTA"
+  cr_start=${#T_NAMES[@]}
+
+  # A6: Adobe Creative Cloud
+  scan_target "Adobe Media Cache" "$HOME/Library/Application Support/Adobe/Common/Media Cache Files" "Creative" "SAFE" "rm"
+  # AE disk cache — scan all versions
+  for ae_dir in "$HOME/Library/Caches/Adobe/After Effects/"*/; do
+    [[ -d "$ae_dir" ]] || continue
+    local ae_ver
+    ae_ver=$(basename "$ae_dir")
+    scan_target "AE Disk Cache ($ae_ver)" "${ae_dir}Disk Cache" "Creative" "SAFE" "rm"
+  done
+  scan_target "Adobe Support" "$HOME/Library/Application Support/Adobe" "Creative" "REBUILD" "rm"
+  scan_target "Adobe System" "/Library/Application Support/Adobe" "Creative" "REBUILD" "rm-sudo"
+
+  # A7: Lightroom
+  scan_target "LR Previews" "$HOME/Pictures/Lightroom/Lightroom Catalog Previews.lrdata" "Creative" "SAFE" "rm"
+  scan_target "LR Smart Previews" "$HOME/Pictures/Lightroom/Lightroom Catalog Smart Previews.lrdata" "Creative" "SAFE" "rm"
+  scan_target "LR Backups" "$HOME/Pictures/Lightroom/Backups" "Creative" "REBUILD" "rm"
+
+  # A8: DaVinci Resolve
+  for resolve_dir in "$HOME/Movies/DaVinci Resolve/"*/; do
+    [[ -d "$resolve_dir" ]] || continue
+    scan_target "Resolve: $(basename "$resolve_dir")" "$resolve_dir" "Creative" "SAFE" "rm"
+  done
+  scan_target "Resolve Support" "$HOME/Library/Application Support/Blackmagic Design/DaVinci Resolve" "Creative" "SAFE" "rm"
+
+  cr_count=0; cr_kb=0
+  for ((i=cr_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Creative" ]] && ((cr_count++)) && cr_kb=$((cr_kb + T_SIZES[$i]))
+  done
+  cat_footer "$cr_count" "$cr_kb"
+fi
+
+# ── A9: Mail — IMAP logs + versioned databases ────────────────────────────
+
+if matches_profile "Personal" || matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Mail" "$YELLOW"
+  mail_start=${#T_NAMES[@]}
+
+  # IMAP/Exchange sync logs — can reach 200+ GB
+  scan_target "Mail Sync Logs" "$HOME/Library/Containers/com.apple.mail/Data/Library/Logs/Mail" "Mail" "SAFE" "rm"
+  # Mail Downloads (attachments opened)
+  scan_target "Mail Downloads" "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads" "Mail" "PERSONAL" "rm"
+
+  # Versioned Mail databases — detect active vs obsolete
+  for v in V6 V7 V8 V9 V10; do
+    local mail_dir="$HOME/Library/Mail/$v"
+    [[ -d "$mail_dir" ]] || continue
+    local mail_label="Mail $v"
+    local mail_risk="SAFE"
+    if [[ "$v" == "$MACOS_MAIL_V" ]]; then
+      mail_label="Mail $v (active — $MACOS_CODENAME)"
+      mail_risk="PERSONAL"
+    else
+      mail_label="Mail $v (obsolete)"
+    fi
+    scan_target "$mail_label" "$mail_dir" "Mail" "$mail_risk" "rm"
+  done
+
+  mail_count=0; mail_kb=0
+  for ((i=mail_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Mail" ]] && ((mail_count++)) && mail_kb=$((mail_kb + T_SIZES[$i]))
+  done
+  cat_footer "$mail_count" "$mail_kb"
+fi
+
+# ── A10: /private/var/folders/ — the forgotten temp ───────────────────────
+
+if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
+  if ! is_excluded "/private/var/folders"; then
+    cat_header "/var/folders" "$YELLOW"
+    vf_start=${#T_NAMES[@]}
+
+    log "  │  ${C_WARNING}⚠${C_RESET}  ${C_DIM}Scanning /private/var/folders/ requires admin access${C_RESET}\n"
+    # Scan top consumers dynamically
+    while IFS=$'\t' read -r kb path; do
+      [[ -z "$kb" || -z "$path" ]] && continue
+      kb=$(echo "$kb" | tr -d '[:space:]')
+      (( kb > MIN_SIZE_KB )) || continue
+      local vf_name
+      vf_name=$(basename "$path")
+      is_excluded "$path" && continue
+
+      T_NAMES+=("var/folders: $vf_name")
+      T_PATHS+=("$path")
+      T_SIZES+=("$kb")
+      T_CATS+=("System Temp")
+      T_RISKS+=("SAFE")
+      T_METHODS+=("rm-sudo")
+      FOUND_TOTAL=$((FOUND_TOTAL + kb))
+      log "  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "var/folders: $vf_name" "$(fmt "$kb")"
+    done < <(sudo du -sk /private/var/folders/*/*/ 2>/dev/null | sort -nr | head -20)
+
+    vf_count=0; vf_kb=0
+    for ((i=vf_start; i<${#T_CATS[@]}; i++)); do
+      [[ "${T_CATS[$i]}" == "System Temp" ]] && ((vf_count++)) && vf_kb=$((vf_kb + T_SIZES[$i]))
+    done
+    cat_footer "$vf_count" "$vf_kb"
+  fi
+fi
+
+# ── A11: Spotlight index ──────────────────────────────────────────────────
+
+if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
+  local _spotlight_path
+  if (( MACOS_MAJOR >= 11 )); then
+    _spotlight_path="/System/Volumes/Data/.Spotlight-V100"
+  else
+    _spotlight_path="/.Spotlight-V100"
+  fi
+  if sudo test -d "$_spotlight_path" 2>/dev/null; then
+    log "\r\033[K  │  ${C_DIM}…${C_RESET}  %-44s" "Spotlight Index"
+    local spot_kb
+    spot_kb=$(sudo du -sk "$_spotlight_path" 2>/dev/null | awk '{print $1}')
+    spot_kb=${spot_kb:-0}
+    if (( spot_kb > MIN_SIZE_KB )); then
+      T_NAMES+=("Spotlight Index")
+      T_PATHS+=("__spotlight_rebuild__")
+      T_SIZES+=("$spot_kb")
+      T_CATS+=("System")
+      T_RISKS+=("SAFE")
+      T_METHODS+=("spotlight-rebuild")
+      FOUND_TOTAL=$((FOUND_TOTAL + spot_kb))
+      log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "Spotlight Index" "$(fmt "$spot_kb")"
+    else
+      log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "Spotlight Index"
+    fi
+  fi
+fi
+
+# ── A12: Google Drive DriveFS ─────────────────────────────────────────────
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  local _gd_base="$HOME/Library/Application Support/Google/DriveFS"
+  if [[ -d "$_gd_base" ]]; then
+    for gd_id_dir in "$_gd_base"/*/; do
+      [[ -d "${gd_id_dir}content_cache" ]] || continue
+      local gd_id
+      gd_id=$(basename "$gd_id_dir")
+      scan_target "GDrive Cache ($gd_id)" "${gd_id_dir}content_cache" "App" "SAFE" "rm"
+    done
+  fi
+fi
+
+# ── A13: Telegram ─────────────────────────────────────────────────────────
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  scan_target "Telegram Media" "$HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram" "App" "PERSONAL" "rm"
+fi
+
 # ── Scan summary ─────────────────────────────────────────────────────────────
 
 SCAN_END=$(date +%s)
@@ -2073,6 +2252,7 @@ if [[ "$DRY_RUN" == true ]]; then
       qlmanage-reset) cmd="qlmanage -r cache && rm -rf \"$path\"" ;;
       find-artifact)  cmd="find \"$path\" -name '${name%% (*}' -maxdepth 5 -type d -exec rm -rf {} +" ;;
       docker-prune)   cmd="docker system prune -a --volumes -f" ;;
+      spotlight-rebuild) cmd="sudo mdutil -E /" ;;
     esac
 
     printf "  ${DIM}[%2d]${NC} %-36s  ${DIM}%s${NC}\n" "$idx" "$name" "$cmd"
@@ -2200,6 +2380,9 @@ for entry in "${SORTED[@]}"; do
       ;;
     docker-prune)
       docker system prune -a --volumes -f &>/dev/null && ok=true
+      ;;
+    spotlight-rebuild)
+      sudo mdutil -E / &>/dev/null && ok=true
       ;;
   esac
 
