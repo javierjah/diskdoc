@@ -845,7 +845,7 @@ interactive_select() {
 # ── Flat selector (bash 3.2 compatible — no collapse/expand) ────────────────
 
 _interactive_select_flat() {
-  local num=$1 cursor=0
+  local num=$1 cursor=0 scroll=0
 
   # Find max size for bars
   local max_kb=0
@@ -855,6 +855,11 @@ _interactive_select_flat() {
   done
 
   detect_term_size
+  # Reserve lines for header(1) + status(3) + detail(8) + padding(2) = 14
+  local page_size=$(( TERM_LINES > 14 ? TERM_LINES - 14 : 20 ))
+  (( page_size < 5 )) && page_size=5
+  (( page_size > num )) && page_size=$num
+
   tput civis 2>/dev/null
   stty -echo -icanon 2>/dev/null
   trap 'tput cnorm 2>/dev/null; stty sane 2>/dev/null' EXIT INT TERM
@@ -871,8 +876,23 @@ _interactive_select_flat() {
       fi
     done
 
+    # Adjust scroll window to keep cursor visible
+    (( cursor < scroll )) && scroll=$cursor
+    (( cursor >= scroll + page_size )) && scroll=$(( cursor - page_size + 1 ))
+
     local drawn=0
-    for ((si=0; si<num; si++)); do
+    local end=$(( scroll + page_size ))
+    (( end > num )) && end=$num
+
+    # Scroll indicator top
+    if (( scroll > 0 )); then
+      printf "  ${C_DIM}  ▲ %d more above${C_RESET}\033[K\n" "$scroll"
+    else
+      printf "\033[K\n"
+    fi
+    ((drawn++))
+
+    for ((si=scroll; si<end; si++)); do
       local ri="${SORTED[$si]#*|}"
       local name="${T_NAMES[$ri]}"
       (( ${#name} > 32 )) && name="${name:0:29}..."
@@ -902,6 +922,15 @@ _interactive_select_flat() {
       fi
       ((drawn++))
     done
+
+    # Scroll indicator bottom
+    local remaining=$(( num - end ))
+    if (( remaining > 0 )); then
+      printf "  ${C_DIM}  ▼ %d more below${C_RESET}\033[K\n" "$remaining"
+    else
+      printf "\033[K\n"
+    fi
+    ((drawn++))
 
     printf "\033[K\n"
     printf "  ${C_BOLD}Selected: %d/%d items — %s${C_RESET}\033[K\n" "$sel_count" "$num" "$(fmt $sel_kb)"
