@@ -23,13 +23,9 @@
 # shellcheck disable=SC2059,SC2004
 set -uo pipefail
 
-# ── Require bash 4+ ─────────────────────────────────────────────────────────
-if (( BASH_VERSINFO[0] < 4 )); then
-  echo "diskdoc v3 requires bash 4+. Install with: brew install bash"
-  echo "Your system bash (${BASH_VERSION}) is from 2007 because Apple refuses"
-  echo "to update it due to GPLv3 licensing — another classic Apple move."
-  exit 1
-fi
+# ── Bash version detection ──────────────────────────────────────────────────
+HAS_BASH4=false
+(( BASH_VERSINFO[0] >= 4 )) && HAS_BASH4=true
 
 VERSION="3.0.0"
 
@@ -836,6 +832,134 @@ render_detail_panel() {
 interactive_select() {
   local num=${#SORTED[@]}
 
+  # Select all by default
+  for ((i=0; i<num; i++)); do SELECTED[$i]=1; done
+
+  if [[ "$HAS_BASH4" == true ]]; then
+    _interactive_select_tree "$num"
+  else
+    _interactive_select_flat "$num"
+  fi
+}
+
+# ── Flat selector (bash 3.2 compatible — no collapse/expand) ────────────────
+
+_interactive_select_flat() {
+  local num=$1 cursor=0
+
+  # Find max size for bars
+  local max_kb=0
+  for ((si=0; si<num; si++)); do
+    local ri="${SORTED[$si]#*|}"
+    (( T_SIZES[$ri] > max_kb )) && max_kb=${T_SIZES[$ri]}
+  done
+
+  detect_term_size
+  tput civis 2>/dev/null
+  stty -echo -icanon 2>/dev/null
+  trap 'tput cnorm 2>/dev/null; stty sane 2>/dev/null' EXIT INT TERM
+
+  _draw_flat() {
+    [[ "${1:-}" == "redraw" ]] && printf '\033[%dA' "$_last_draw_lines"
+
+    local sel_kb=0 sel_count=0
+    for ((i=0; i<num; i++)); do
+      if [[ "${SELECTED[$i]}" == "1" ]]; then
+        local ri="${SORTED[$i]#*|}"
+        sel_kb=$((sel_kb + T_SIZES[$ri]))
+        ((sel_count++)) || true
+      fi
+    done
+
+    local drawn=0
+    for ((si=0; si<num; si++)); do
+      local ri="${SORTED[$si]#*|}"
+      local name="${T_NAMES[$ri]}"
+      (( ${#name} > 32 )) && name="${name:0:29}..."
+      local sf
+      if [[ "${T_METHODS[$ri]}" == "tm-thin" ]]; then
+        sf="${TM_SNAP_COUNT} snaps"
+      else
+        sf=$(fmt "${T_SIZES[$ri]}")
+      fi
+      local tag="${T_RISKS[$ri]}"
+      local rc
+      rc=$(risk_color "$tag")
+      local icon
+      icon=$(risk_icon "$tag")
+      local bar
+      bar=$(draw_bar "${T_SIZES[$ri]}" "$max_kb" 8)
+
+      local check="[ ]"
+      [[ "${SELECTED[$si]}" == "1" ]] && check="[x]"
+
+      if (( si == cursor )); then
+        printf "  ${C_BOLD}${C_INFO}> ${check}${C_RESET} %-32s %10s %s %s ${rc}${C_BOLD}%-8s${C_RESET}\033[K\n" \
+          "$name" "$sf" "$bar" "$icon" "$tag"
+      else
+        printf "    ${check} %-32s %10s %s %s ${rc}%-8s${C_RESET}\033[K\n" \
+          "$name" "$sf" "$bar" "$icon" "$tag"
+      fi
+      ((drawn++))
+    done
+
+    printf "\033[K\n"
+    printf "  ${C_BOLD}Selected: %d/%d items — %s${C_RESET}\033[K\n" "$sel_count" "$num" "$(fmt $sel_kb)"
+    printf "  ${C_DIM}↑↓ move  ␣ toggle  A all  N none  ⏎ confirm  q quit${C_RESET}\033[K\n"
+    drawn=$((drawn + 3))
+
+    # Detail panel
+    local ri="${SORTED[$cursor]#*|}"
+    printf "\033[K\n"
+    printf "  "; render_detail_panel "$ri"
+    drawn=$((drawn + 8))
+
+    _last_draw_lines=$drawn
+  }
+
+  local _last_draw_lines=0
+  _draw_flat
+
+  while true; do
+    IFS= read -rsn1 key
+    case "$key" in
+      $'\x1b')
+        read -rsn2 seq
+        case "$seq" in
+          '[A') (( cursor > 0 )) && ((cursor--)) ;;
+          '[B') (( cursor < num - 1 )) && ((cursor++)) ;;
+        esac
+        ;;
+      ' ')
+        if [[ "${SELECTED[$cursor]}" == "1" ]]; then
+          SELECTED[$cursor]=0
+        else
+          SELECTED[$cursor]=1
+        fi
+        ;;
+      'a'|'A') for ((i=0; i<num; i++)); do SELECTED[$i]=1; done ;;
+      'n'|'N') for ((i=0; i<num; i++)); do SELECTED[$i]=0; done ;;
+      ''|$'\n') break ;;
+      'q'|'Q')
+        tput cnorm 2>/dev/null
+        stty sane 2>/dev/null
+        echo ""
+        printf "  ${C_DIM}Cancelled. Nothing was deleted.${C_RESET}\n"
+        exit 0
+        ;;
+    esac
+    _draw_flat "redraw"
+  done
+
+  tput cnorm 2>/dev/null
+  stty sane 2>/dev/null
+}
+
+# ── Tree selector (bash 4+ — collapsible categories) ───────────────────────
+
+_interactive_select_tree() {
+  local num=$1
+
   # Build category tree structure
   declare -a _tree_cat_order=()    # unique cats in order
   declare -A _tree_cat_items=()    # cat → "sorted_idx1,sorted_idx2,..."
@@ -860,9 +984,6 @@ interactive_select() {
     _tree_cat_kb[$cat]=$(( ${_tree_cat_kb[$cat]} + T_SIZES[$real_idx] ))
     (( T_SIZES[$real_idx] > _tree_cat_max[$cat] )) && _tree_cat_max[$cat]=${T_SIZES[$real_idx]}
   done
-
-  # Select all by default
-  for ((i=0; i<num; i++)); do SELECTED[$i]=1; done
 
   # Build flat visible-row list
   # Each row is "cat:CAT_NAME" or "item:SORTED_IDX"
