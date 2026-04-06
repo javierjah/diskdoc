@@ -193,10 +193,10 @@ while [[ $# -gt 0 ]]; do
       fi
       # Test 2: scan_untouchable_target only writes to U_*
       echo "[2] Checking scan_untouchable_target writes only to U_*..."
-      local _t_before=${#T_NAMES[@]}
+      _t_before=${#T_NAMES[@]}
       scan_untouchable_target "TEST_ITEM" "/nonexistent/test/path" "Test description"
-      local _t_after=${#T_NAMES[@]}
-      local _u_last=${U_NAMES[${#U_NAMES[@]}-1]}
+      _t_after=${#T_NAMES[@]}
+      _u_last=${U_NAMES[${#U_NAMES[@]}-1]}
       if (( _t_before == _t_after )) && [[ "$_u_last" == "TEST_ITEM" ]]; then
         echo "  PASS: scan_untouchable_target writes to U_*, not T_*"
       else
@@ -1096,6 +1096,8 @@ fi
 
 SCAN_START=$(date +%s)
 log "\n"
+
+run_all_scans() {
 
 # ── Code directories (shared by node_modules + Rust scans) ──────────────────
 CODE_DIRS=("$HOME/code" "$HOME/projects" "$HOME/dev" "$HOME/src" "$HOME/repos" "$HOME/workspace" "$HOME/work" "$HOME/Developer")
@@ -2408,7 +2410,7 @@ fi
 if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   local _gc_dir="$HOME/Library/Group Containers"
   if [[ -d "$_gc_dir" ]]; then
-    local gc_before=${#T_NAMES[@]} gc_kb=0 gc_count=0
+    local gc_kb=0 gc_count=0
     while IFS= read -r -d '' gc_entry; do
       local gc_name
       gc_name=$(basename "$gc_entry")
@@ -2525,6 +2527,9 @@ if (( _u_count > 0 )); then
   log "  │  ${C_DIM}Total untouchable: %s — shown for transparency, never deletable${C_RESET}\n" "$(fmt "$U_TOTAL")"
 fi
 
+}
+run_all_scans
+
 # ── Scan summary ─────────────────────────────────────────────────────────────
 
 SCAN_END=$(date +%s)
@@ -2603,7 +2608,7 @@ if [[ "$JSON_MODE" == true ]]; then
   printf '\n  ],\n'
   printf '  "untouchable_total_bytes": %d,\n' "$((U_TOTAL * 1024))"
   printf '  "untouchable": [\n'
-  local uj_first=true
+  uj_first=true
   for (( ui=0; ui<${#U_NAMES[@]}; ui++ )); do
     (( U_SIZES[ui] == 0 )) && continue
     $uj_first || printf ',\n'
@@ -2721,8 +2726,8 @@ if [[ "$REPORT_MODE" == true ]]; then
 
     printf "  ${BOLD}%s${NC}  ${DIM}(%s)${NC}\n" "$rcat" "$(fmt "$cat_total")"
 
-    local last_idx=$(( ${#cat_items[@]} - 1 ))
-    local ci_idx=0
+    last_idx=$(( ${#cat_items[@]} - 1 ))
+    ci_idx=0
     for ci in "${cat_items[@]}"; do
       local_tag="${T_RISKS[$ci]}"
       local_rc=$(risk_color "$local_tag")
@@ -2735,7 +2740,7 @@ if [[ "$REPORT_MODE" == true ]]; then
       name="${T_NAMES[$ci]}"
       (( ${#name} > 36 )) && name="${name:0:33}..."
       local_bar=$(draw_bar "${T_SIZES[$ci]}" "$cat_max_kb" 10)
-      local connector
+      connector=""
       if (( ci_idx == last_idx )); then connector="└──"; else connector="├──"; fi
       printf "  ${DIM}%s${NC} %-36s %10s  %s  %s ${local_rc}${BOLD}%s${NC}\n" \
         "$connector" "$name" "$local_size" "$local_bar" "$local_icon" "$local_tag"
