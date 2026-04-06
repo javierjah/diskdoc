@@ -11,6 +11,7 @@
 #   diskdoc --auto             Automatic mode (no confirmation)
 #   diskdoc --scan             Scan only, don't delete anything
 #   diskdoc --dry-run          Show what would be deleted (with commands)
+#   diskdoc --report           Full audit (includes PERSONAL, no deletion)
 #   diskdoc --json             Output scan results as JSON
 #   diskdoc --min-size N       Minimum size in MB to show (default: 50)
 #   diskdoc --profile PROFILE  Filter: all, dev, system, apps
@@ -45,6 +46,7 @@ AUTO_MODE=false
 SCAN_ONLY=false
 DRY_RUN=false
 JSON_MODE=false
+REPORT_MODE=false
 MIN_SIZE_MB=50
 PROFILE="all"
 DOCTOR_MODE=false
@@ -59,6 +61,7 @@ Usage:
   diskdoc --scan             Scan only, show what can be cleaned
   diskdoc --auto             Clean without asking for confirmation
   diskdoc --dry-run          Show what would be deleted (with commands)
+  diskdoc --report           Full audit tree (includes PERSONAL, no deletion)
   diskdoc --json             Output scan results as JSON (implies --scan)
   diskdoc --min-size N       Minimum size in MB to include (default: 50)
   diskdoc --profile PROFILE  Filter by profile: all, dev, system, apps
@@ -106,6 +109,7 @@ while [[ $# -gt 0 ]]; do
     --scan)       SCAN_ONLY=true ;;
     --dry-run)    DRY_RUN=true; SCAN_ONLY=true ;;
     --json)       JSON_MODE=true; SCAN_ONLY=true ;;
+    --report)     REPORT_MODE=true; SCAN_ONLY=true ;;
     --no-color)   disable_colors ;;
     --min-size)
       if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
@@ -1241,6 +1245,64 @@ echo -e "${BOLD}${CYAN}  ├─────┴───────────�
 printf  "${BOLD}${CYAN}  │${NC}${BOLD}${MAGENTA}  TOTAL RECOVERABLE                                     ${CYAN}│${NC}${BOLD}${MAGENTA} %10s ${CYAN}│${NC}                          ${CYAN}│${NC}\n" "$(fmt $FOUND_TOTAL)"
 echo -e "${BOLD}${CYAN}  └────────────────────────────────────────────────────────┴────────────┴──────────────────────────┘${NC}"
 echo ""
+
+# ── Report mode (hierarchical audit tree) ────────────────────────────────────
+
+if [[ "$REPORT_MODE" == true ]]; then
+  echo -e "  ${BOLD}${CYAN}diskdoc report — Full Disk Audit${NC}"
+  echo ""
+
+  # Collect unique categories preserving insertion order
+  declare -a report_cats=()
+  for entry in "${SORTED[@]}"; do
+    i="${entry#*|}"
+    c="${T_CATS[$i]}"
+    found_cat=false
+    for rc in "${report_cats[@]+"${report_cats[@]}"}"; do
+      [[ "$rc" == "$c" ]] && found_cat=true && break
+    done
+    $found_cat || report_cats+=("$c")
+  done
+
+  grand_total=0
+  for rcat in "${report_cats[@]}"; do
+    cat_total=0
+    cat_items=()
+    for entry in "${SORTED[@]}"; do
+      i="${entry#*|}"
+      [[ "${T_CATS[$i]}" == "$rcat" ]] || continue
+      cat_items+=("$i")
+      cat_total=$((cat_total + T_SIZES[$i]))
+    done
+
+    rc_color=$(risk_color "${T_RISKS[${cat_items[0]}]}")
+    printf "  ${BOLD}%s${NC}  ${DIM}(%s)${NC}\n" "$rcat" "$(fmt "$cat_total")"
+
+    for ci in "${cat_items[@]}"; do
+      local_tag="${T_RISKS[$ci]}"
+      local_rc=$(risk_color "$local_tag")
+      if [[ "${T_METHODS[$ci]}" == "tm-thin" ]]; then
+        local_size="${TM_SNAP_COUNT} snaps"
+      else
+        local_size=$(fmt "${T_SIZES[$ci]}")
+      fi
+      name="${T_NAMES[$ci]}"
+      (( ${#name} > 40 )) && name="${name:0:37}..."
+      printf "  ${DIM}├──${NC} %-40s %10s  ${local_rc}${BOLD}%s${NC}\n" "$name" "$local_size" "$local_tag"
+    done
+
+    grand_total=$((grand_total + cat_total))
+    echo ""
+  done
+
+  printf "  ${BOLD}${MAGENTA}Total: %s${NC}  ${DIM}(%d items across %d categories)${NC}\n" \
+    "$(fmt "$grand_total")" "${#T_NAMES[@]}" "${#report_cats[@]}"
+  echo ""
+  printf "  ${DIM}Report mode: nothing was deleted.${NC}\n"
+  printf "  ${DIM}Items tagged PERSONAL are included for audit only.${NC}\n"
+  echo ""
+  exit 0
+fi
 
 # ── Dry-run output ───────────────────────────────────────────────────────────
 
