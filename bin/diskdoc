@@ -708,9 +708,36 @@ if matches_profile "Dev Tools"; then
   cat_header "Dev Tools" "$CYAN"
   dev_start=${#T_NAMES[@]}
 
-  scan_target "Xcode DerivedData"   "$HOME/Library/Developer/Xcode/DerivedData"    "Dev Tools" "SAFE" "rm"
-  scan_target "Xcode Archives"      "$HOME/Library/Developer/Xcode/Archives"       "Dev Tools" "SAFE" "rm"
-  scan_target "iOS Simulators"      "$HOME/Library/Developer/CoreSimulator"         "Dev Tools" "SAFE" "rm"
+  # Xcode
+  scan_target "Xcode DerivedData"        "$HOME/Library/Developer/Xcode/DerivedData"         "Dev Tools" "SAFE" "rm"
+  scan_target "Xcode Archives"           "$HOME/Library/Developer/Xcode/Archives"            "Dev Tools" "SAFE" "rm"
+  scan_target "Xcode iOS DeviceSupport"  "$HOME/Library/Developer/Xcode/iOS DeviceSupport"   "Dev Tools" "SAFE" "rm"
+  scan_target "Xcode watchOS Support"    "$HOME/Library/Developer/Xcode/watchOS DeviceSupport" "Dev Tools" "SAFE" "rm"
+  scan_target "Xcode macOS Support"      "$HOME/Library/Developer/Xcode/macOS DeviceSupport" "Dev Tools" "SAFE" "rm"
+  scan_target "Xcode Products"           "$HOME/Library/Developer/Xcode/Products"            "Dev Tools" "SAFE" "rm"
+  scan_target "Xcode Cache"              "$HOME/Library/Caches/com.apple.dt.Xcode"           "Dev Tools" "SAFE" "rm"
+  scan_target "iOS Simulators"           "$HOME/Library/Developer/CoreSimulator"              "Dev Tools" "SAFE" "rm"
+  scan_target "Simulator Volumes"        "/Library/Developer/CoreSimulator/Volumes"           "Dev Tools" "SAFE" "rm-sudo"
+  scan_target "Simulator Runtimes"       "/Library/Developer/CoreSimulator/Profiles/Runtimes" "Dev Tools" "SAFE" "rm-sudo"
+
+  # Delete unavailable simulators if xcrun is available
+  if has_cmd xcrun; then
+    log "\r\033[K  │  ${DIM}…${NC}  %-44s" "Unavailable Simulators"
+    unavail_count=$(xcrun simctl list devices unavailable 2>/dev/null | grep -c "unavailable" || true)
+    if (( unavail_count > 0 )); then
+      T_NAMES+=("Unavailable Simulators (${unavail_count})")
+      T_PATHS+=("__xcrun_simctl__")
+      T_SIZES+=("0")
+      T_CATS+=("Dev Tools")
+      T_RISKS+=("SAFE")
+      T_METHODS+=("xcrun-sim")
+      log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Unavailable Simulators" "${unavail_count} devs"
+    else
+      log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "Unavailable Simulators"
+    fi
+  fi
+
+  # Other dev tools
   scan_target "Android SDK"         "$HOME/Library/Android"                         "Dev Tools" "SAFE" "rm"
   scan_target "CocoaPods Cache"     "$HOME/Library/Caches/CocoaPods"               "Dev Tools" "SAFE" "rm"
   scan_target "Gradle Cache"        "$HOME/.gradle/caches"                         "Dev Tools" "SAFE" "rm"
@@ -1042,6 +1069,7 @@ if [[ "$DRY_RUN" == true ]]; then
       pnpm-prune)   cmd="pnpm store prune" ;;
       brew-cleanup) cmd="brew cleanup --prune=all" ;;
       tm-thin)      cmd="sudo tmutil thinlocalsnapshots / 99999999999" ;;
+      xcrun-sim)    cmd="xcrun simctl delete unavailable" ;;
     esac
 
     printf "  ${DIM}[%2d]${NC} %-36s  ${DIM}%s${NC}\n" "$idx" "$name" "$cmd"
@@ -1155,6 +1183,9 @@ for entry in "${SORTED[@]}"; do
       ;;
     tm-thin)
       sudo tmutil thinlocalsnapshots / 99999999999 &>/dev/null && ok=true
+      ;;
+    xcrun-sim)
+      xcrun simctl delete unavailable &>/dev/null && ok=true
       ;;
   esac
 
