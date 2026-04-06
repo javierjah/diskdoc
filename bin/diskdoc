@@ -872,6 +872,64 @@ if matches_profile "App"; then
   scan_target "Cursor Data"          "$HOME/Library/Application Support/Cursor"                   "App" "SAFE" "rm"
   scan_target "Mail Attachment Cache" "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads" "App" "SAFE" "rm"
 
+  # Known heavy Electron app caches
+  scan_target "Slack Cache"          "$HOME/Library/Application Support/Slack/Service Worker/CacheStorage"  "App" "SAFE" "rm"
+  scan_target "Discord Cache"        "$HOME/Library/Application Support/discord/Cache"                      "App" "SAFE" "rm"
+  scan_target "Notion Cache"         "$HOME/Library/Application Support/Notion"                             "App" "SAFE" "rm"
+
+  # Dynamic: sandbox container caches > threshold
+  for cdir in "$HOME/Library/Containers/"*/Data/Library/Caches; do
+    [[ -d "$cdir" ]] || continue
+    container=$(echo "$cdir" | sed "s|$HOME/Library/Containers/||" | sed 's|/Data/Library/Caches||')
+    # Skip already-scanned containers
+    already=false
+    for existing in "${T_PATHS[@]+"${T_PATHS[@]}"}"; do
+      [[ "$cdir" == "$existing" || "$existing" == *"$container"* ]] && already=true && break
+    done
+    $already && continue
+    is_excluded "$cdir" && continue
+
+    kb=$(get_kb "$cdir")
+    if (( kb > MIN_SIZE_KB )); then
+      short="${container}"
+      (( ${#short} > 30 )) && short="${short:0:27}..."
+      T_NAMES+=("Container: $short")
+      T_PATHS+=("$cdir")
+      T_SIZES+=("$kb")
+      T_CATS+=("App")
+      T_RISKS+=("SAFE")
+      T_METHODS+=("rm")
+      FOUND_TOTAL=$((FOUND_TOTAL + kb))
+      log "  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Container: $short" "$(fmt "$kb")"
+    fi
+  done
+
+  # Dynamic: group container caches > threshold
+  for gdir in "$HOME/Library/Group Containers/"*/Library/Caches; do
+    [[ -d "$gdir" ]] || continue
+    group=$(echo "$gdir" | sed "s|$HOME/Library/Group Containers/||" | sed 's|/Library/Caches||')
+    already=false
+    for existing in "${T_PATHS[@]+"${T_PATHS[@]}"}"; do
+      [[ "$gdir" == "$existing" || "$existing" == *"$group"* ]] && already=true && break
+    done
+    $already && continue
+    is_excluded "$gdir" && continue
+
+    kb=$(get_kb "$gdir")
+    if (( kb > MIN_SIZE_KB )); then
+      short="${group}"
+      (( ${#short} > 30 )) && short="${short:0:27}..."
+      T_NAMES+=("Group: $short")
+      T_PATHS+=("$gdir")
+      T_SIZES+=("$kb")
+      T_CATS+=("App")
+      T_RISKS+=("SAFE")
+      T_METHODS+=("rm")
+      FOUND_TOTAL=$((FOUND_TOTAL + kb))
+      log "  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Group: $short" "$(fmt "$kb")"
+    fi
+  done
+
   app_count=0; app_kb=0
   for ((i=app_start; i<${#T_CATS[@]}; i++)); do
     [[ "${T_CATS[$i]}" == "App" ]] && ((app_count++)) && app_kb=$((app_kb + T_SIZES[$i]))
