@@ -72,7 +72,8 @@ Profiles:
   all      Everything (default)
   dev      Dev tools + package managers + node_modules + Rust targets
   system   System caches + logs + Trash
-  apps     Application data (Docker, Claude, ChatGPT, etc.)
+  apps     Application data + media (Docker, Claude, ChatGPT, etc.)
+  personal Personal data (Mail, Messages, iCloud, Photos — report only)
 
 Exclusions:
   Create ~/.diskdocrc to permanently exclude paths:
@@ -137,9 +138,9 @@ done
 
 # Validate profile
 case "$PROFILE" in
-  all|dev|system|apps) ;;
+  all|dev|system|apps|personal) ;;
   *)
-    echo "Unknown profile: $PROFILE (valid: all, dev, system, apps)"
+    echo "Unknown profile: $PROFILE (valid: all, dev, system, apps, personal)"
     exit 1
     ;;
 esac
@@ -179,8 +180,9 @@ matches_profile() {
   [[ "$PROFILE" == "all" ]] && return 0
   case "$PROFILE" in
     dev)    [[ "$cat" == "Dev Tools" || "$cat" == "Pkg Manager" ]] ;;
-    system) [[ "$cat" == "System" || "$cat" == "Cache" ]] ;;
-    apps)   [[ "$cat" == "App" ]] ;;
+    system) [[ "$cat" == "System" || "$cat" == "Cache" || "$cat" == "Logs" ]] ;;
+    apps)   [[ "$cat" == "App" || "$cat" == "Media" ]] ;;
+    personal) [[ "$cat" == "Personal" ]] ;;
     *)      return 0 ;;
   esac
 }
@@ -829,6 +831,33 @@ if matches_profile "App"; then
     [[ "${T_CATS[$i]}" == "App" ]] && ((app_count++)) && app_kb=$((app_kb + T_SIZES[$i]))
   done
   cat_footer "$app_count" "$app_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# PHASE: Personal Data (PERSONAL — report only, never auto-delete)
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "Personal" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Personal Data ⚠ report only" "$MAGENTA"
+  personal_start=${#T_NAMES[@]}
+
+  # Mail databases (try multiple versions)
+  for v in V10 V9 V8; do
+    [[ -d "$HOME/Library/Mail/$v" ]] && {
+      scan_target "Mail Database ($v)" "$HOME/Library/Mail/$v" "Personal" "PERSONAL" "rm"
+      break
+    }
+  done
+
+  scan_target "Mail Downloads"        "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads" "Personal" "PERSONAL" "rm"
+  scan_target "Messages Attachments"  "$HOME/Library/Messages/Attachments"                                  "Personal" "PERSONAL" "rm"
+  scan_target "Messages Database"     "$HOME/Library/Messages"                                              "Personal" "PERSONAL" "rm"
+
+  personal_count=0; personal_kb=0
+  for ((i=personal_start; i<${#T_NAMES[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Personal" ]] && ((personal_count++)) && personal_kb=$((personal_kb + T_SIZES[$i]))
+  done
+  cat_footer "$personal_count" "$personal_kb"
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
