@@ -584,6 +584,30 @@ risk_icon() {
   fi
 }
 
+# ── TUI: Inline proportional bars ────────────────────────────────────────────
+
+# draw_bar value max_value width
+# Renders: ██████░░░░ proportional to value/max_value
+draw_bar() {
+  local value=$1 max_val=$2 width=${3:-10}
+  local filled=0
+  if (( max_val > 0 )); then
+    filled=$(( (value * width * 8) / max_val ))
+  fi
+  local full_blocks=$(( filled / 8 ))
+  local remainder=$(( filled % 8 ))
+  local empty=$(( width - full_blocks - (remainder > 0 ? 1 : 0) ))
+
+  local eighth=('█' '▏' '▎' '▍' '▌' '▋' '▊' '▉')
+  local bar=""
+  for ((i=0; i<full_blocks; i++)); do bar+="█"; done
+  if (( remainder > 0 )); then
+    bar+="${eighth[$remainder]}"
+  fi
+  for ((i=0; i<empty; i++)); do bar+="░"; done
+  printf '%s' "$bar"
+}
+
 # ── TUI: Generic box drawing ────────────────────────────────────────────────
 
 # draw_box title color width lines...
@@ -1529,11 +1553,17 @@ if [[ ${#_rest[@]} -gt 0 ]]; then
   SORTED+=("${_rest[@]}")
 fi
 
-# ── Display table ────────────────────────────────────────────────────────────
+# ── Display table with inline bars ───────────────────────────────────────────
 
-echo -e "${BOLD}${CYAN}  ┌─────┬──────────────────────────────────┬──────────────┬────────────┬──────────────────────────┐${NC}"
-printf  "${BOLD}${CYAN}  │${NC}${BOLD} %-3s ${CYAN}│${NC}${BOLD} %-32s ${CYAN}│${NC}${BOLD} %-12s ${CYAN}│${NC}${BOLD} %-10s ${CYAN}│${NC}${BOLD} %-24s ${CYAN}│${NC}\n" "#" "Name" "Category" "Size" "Risk"
-echo -e "${BOLD}${CYAN}  ├─────┼──────────────────────────────────┼──────────────┼────────────┼──────────────────────────┤${NC}"
+# Find max size for proportional bars
+TABLE_MAX_KB=0
+for entry in "${SORTED[@]}"; do
+  i="${entry#*|}"
+  (( T_SIZES[$i] > TABLE_MAX_KB )) && TABLE_MAX_KB=${T_SIZES[$i]}
+done
+
+printf "  ${C_DIM}%-3s  %-32s  %10s  %-10s  %-6s${C_RESET}\n" "#" "Name" "Size" "Bar" "Risk"
+printf "  ${C_DIM}%s${C_RESET}\n" "────────────────────────────────────────────────────────────────────────────"
 
 idx=1
 for entry in "${SORTED[@]}"; do
@@ -1545,35 +1575,24 @@ for entry in "${SORTED[@]}"; do
     size_fmt=$(fmt "${T_SIZES[$i]}")
   fi
 
-  if (( T_SIZES[$i] >= 10485760 )); then
-    color="$RED"
-  elif (( T_SIZES[$i] >= 1048576 )); then
-    color="$YELLOW"
-  elif [[ "${T_NAMES[$i]}" == ★* ]]; then
-    color="$YELLOW"
-  else
-    color="$NC"
-  fi
+  local_tag="${T_RISKS[$i]}"
+  rc=$(risk_color "$local_tag")
+  icon=$(risk_icon "$local_tag")
 
   name="${T_NAMES[$i]}"
   (( ${#name} > 32 )) && name="${name:0:29}..."
 
-  tag="${T_RISKS[$i]}"
-  rc=$(risk_color "$tag")
+  bar=$(draw_bar "${T_SIZES[$i]}" "$TABLE_MAX_KB" 10)
 
-  cat="${T_CATS[$i]}"
-  (( ${#cat} > 12 )) && cat="${cat:0:12}"
-
-  # Risk tag with its own color, rest of row uses size-based color
-  printf "${CYAN}  │${NC} ${color}%-3s${NC} ${CYAN}│${NC} ${color}%-32s${NC} ${CYAN}│${NC} ${color}%-12s${NC} ${CYAN}│${NC} ${color}%10s${NC} ${CYAN}│${NC} ${rc}${BOLD}%-8s${NC}%-16s ${CYAN}│${NC}\n" \
-    "$idx" "$name" "$cat" "$size_fmt" "$tag" ""
+  printf "  ${C_DIM}%3d${C_RESET}  %-32s  %10s  %s  %s ${rc}${C_BOLD}%-8s${C_RESET}\n" \
+    "$idx" "$name" "$size_fmt" "$bar" "$icon" "$local_tag"
   ((idx++))
 done
 
-echo -e "${BOLD}${CYAN}  ├─────┴──────────────────────────────────┴──────────────┼────────────┼──────────────────────────┤${NC}"
-printf  "${BOLD}${CYAN}  │${NC}${BOLD}${MAGENTA}  TOTAL RECOVERABLE                                     ${CYAN}│${NC}${BOLD}${MAGENTA} %10s ${CYAN}│${NC}                          ${CYAN}│${NC}\n" "$(fmt $FOUND_TOTAL)"
-echo -e "${BOLD}${CYAN}  └────────────────────────────────────────────────────────┴────────────┴──────────────────────────┘${NC}"
+printf "  ${C_DIM}%s${C_RESET}\n" "────────────────────────────────────────────────────────────────────────────"
+printf "  ${C_BOLD}${C_ACCENT}     TOTAL RECOVERABLE                %10s${C_RESET}\n" "$(fmt $FOUND_TOTAL)"
 echo ""
+
 
 # ── Report mode (hierarchical audit tree) ────────────────────────────────────
 
@@ -1604,19 +1623,33 @@ if [[ "$REPORT_MODE" == true ]]; then
       cat_total=$((cat_total + T_SIZES[$i]))
     done
 
+    # Find max in category for proportional bars
+    cat_max_kb=0
+    for ci in "${cat_items[@]}"; do
+      (( T_SIZES[$ci] > cat_max_kb )) && cat_max_kb=${T_SIZES[$ci]}
+    done
+
     printf "  ${BOLD}%s${NC}  ${DIM}(%s)${NC}\n" "$rcat" "$(fmt "$cat_total")"
 
+    local last_idx=$(( ${#cat_items[@]} - 1 ))
+    local ci_idx=0
     for ci in "${cat_items[@]}"; do
       local_tag="${T_RISKS[$ci]}"
       local_rc=$(risk_color "$local_tag")
+      local_icon=$(risk_icon "$local_tag")
       if [[ "${T_METHODS[$ci]}" == "tm-thin" ]]; then
         local_size="${TM_SNAP_COUNT} snaps"
       else
         local_size=$(fmt "${T_SIZES[$ci]}")
       fi
       name="${T_NAMES[$ci]}"
-      (( ${#name} > 40 )) && name="${name:0:37}..."
-      printf "  ${DIM}├──${NC} %-40s %10s  ${local_rc}${BOLD}%s${NC}\n" "$name" "$local_size" "$local_tag"
+      (( ${#name} > 36 )) && name="${name:0:33}..."
+      local_bar=$(draw_bar "${T_SIZES[$ci]}" "$cat_max_kb" 10)
+      local connector
+      if (( ci_idx == last_idx )); then connector="└──"; else connector="├──"; fi
+      printf "  ${DIM}%s${NC} %-36s %10s  %s  %s ${local_rc}${BOLD}%s${NC}\n" \
+        "$connector" "$name" "$local_size" "$local_bar" "$local_icon" "$local_tag"
+      ((ci_idx++))
     done
 
     grand_total=$((grand_total + cat_total))
