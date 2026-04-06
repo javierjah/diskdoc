@@ -1149,6 +1149,98 @@ if matches_profile "Pkg Manager"; then
   cat_footer "$pkg_count" "$pkg_kb"
 fi
 
+# ════════════════════════════════════════════════════════════════════════════
+# PHASE: Ghost Apps (uninstalled apps with leftover data)
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Ghost Apps" "$RED"
+  ghost_start=${#T_NAMES[@]}
+
+  log "  │  ${DIM}Checking for leftover data from uninstalled apps...${NC}\n"
+
+  is_app_installed() {
+    local bid="$1"
+    # Check common app locations
+    for app_dir in /Applications ~/Applications /System/Applications; do
+      if [[ -d "$app_dir" ]]; then
+        while IFS= read -r plist; do
+          local pbid
+          pbid=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist" 2>/dev/null || true)
+          [[ "$pbid" == "$bid" ]] && return 0
+        done < <(find "$app_dir" -name "Info.plist" -maxdepth 4 2>/dev/null)
+      fi
+    done
+    # Fallback to Spotlight
+    mdfind "kMDItemCFBundleIdentifier == '$bid'" 2>/dev/null | grep -q ".app" && return 0
+    return 1
+  }
+
+  # Check ~/Library/Containers/*
+  for cdir in "$HOME/Library/Containers/"*/; do
+    [[ -d "$cdir" ]] || continue
+    bid=$(basename "$cdir")
+    # Skip system containers and known non-app IDs
+    [[ "$bid" == com.apple.* ]] && continue
+    is_excluded "$cdir" && continue
+
+    if ! is_app_installed "$bid"; then
+      kb=$(get_kb "$cdir")
+      if (( kb > MIN_SIZE_KB )); then
+        short="$bid"
+        (( ${#short} > 36 )) && short="${short:0:33}..."
+        T_NAMES+=("Ghost: $short")
+        T_PATHS+=("$cdir")
+        T_SIZES+=("$kb")
+        T_CATS+=("App")
+        T_RISKS+=("SAFE")
+        T_METHODS+=("rm")
+        FOUND_TOTAL=$((FOUND_TOTAL + kb))
+        log "  │  ${RED}👻${NC} %-44s ${BOLD}%10s${NC}\n" "Ghost: $short" "$(fmt "$kb")"
+      fi
+    fi
+  done
+
+  # Check ~/Library/Application Support/*
+  for asdir in "$HOME/Library/Application Support/"*/; do
+    [[ -d "$asdir" ]] || continue
+    bid=$(basename "$asdir")
+    # Skip non-bundle-id names and known dirs
+    [[ "$bid" == *"."* ]] || continue
+    [[ "$bid" == com.apple.* ]] && continue
+    is_excluded "$asdir" && continue
+
+    # Skip if already scanned (Claude, ChatGPT, etc)
+    already=false
+    for existing in "${T_PATHS[@]+"${T_PATHS[@]}"}"; do
+      [[ "$asdir" == "$existing" || "$existing" == "$asdir"* ]] && already=true && break
+    done
+    $already && continue
+
+    if ! is_app_installed "$bid"; then
+      kb=$(get_kb "$asdir")
+      if (( kb > MIN_SIZE_KB )); then
+        short="$bid"
+        (( ${#short} > 36 )) && short="${short:0:33}..."
+        T_NAMES+=("Ghost: $short")
+        T_PATHS+=("$asdir")
+        T_SIZES+=("$kb")
+        T_CATS+=("App")
+        T_RISKS+=("SAFE")
+        T_METHODS+=("rm")
+        FOUND_TOTAL=$((FOUND_TOTAL + kb))
+        log "  │  ${RED}👻${NC} %-44s ${BOLD}%10s${NC}\n" "Ghost: $short" "$(fmt "$kb")"
+      fi
+    fi
+  done
+
+  ghost_count=0; ghost_kb=0
+  for ((i=ghost_start; i<${#T_NAMES[@]}; i++)); do
+    [[ "${T_NAMES[$i]}" == "Ghost:"* ]] && ((ghost_count++)) && ghost_kb=$((ghost_kb + T_SIZES[$i]))
+  done
+  cat_footer "$ghost_count" "$ghost_kb"
+fi
+
 # ── Scan summary ─────────────────────────────────────────────────────────────
 
 SCAN_END=$(date +%s)
