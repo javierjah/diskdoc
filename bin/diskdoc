@@ -739,8 +739,6 @@ if matches_profile "Dev Tools"; then
   # Other dev tools
   scan_target "Android SDK"         "$HOME/Library/Android"                         "Dev Tools" "SAFE" "rm"
   scan_target "CocoaPods Cache"     "$HOME/Library/Caches/CocoaPods"               "Dev Tools" "SAFE" "rm"
-  scan_target "Gradle Cache"        "$HOME/.gradle/caches"                         "Dev Tools" "SAFE" "rm"
-  scan_target "Go Module Cache"     "$HOME/go/pkg/mod"                             "Dev Tools" "SAFE" "rm"
 
   # node_modules search across code directories
   for code_dir in "${CODE_DIRS[@]}"; do
@@ -805,7 +803,58 @@ if matches_profile "Dev Tools"; then
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# PHASE 3: App Data
+# PHASE: Dev Toolchains (language-specific caches and runtimes)
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "Dev Tools"; then
+  cat_header "Dev Toolchains" "$CYAN"
+  tc_start=${#T_NAMES[@]}
+
+  # Rust
+  scan_target "Cargo Registry"      "$HOME/.cargo/registry"          "Dev Tools" "SAFE" "rm"
+  scan_target "Rustup Toolchains"   "$HOME/.rustup/toolchains"       "Dev Tools" "SAFE" "rm"
+
+  # Go
+  scan_target "Go Module Cache"     "$HOME/go/pkg/mod/cache"         "Dev Tools" "SAFE" "rm"
+  scan_target "Go Build Cache"      "$HOME/Library/Caches/go-build"  "Dev Tools" "SAFE" "rm"
+
+  # Java/Kotlin
+  scan_target "Gradle Caches"       "$HOME/.gradle/caches"           "Dev Tools" "SAFE" "rm"
+  scan_target "Maven Repository"    "$HOME/.m2/repository"           "Dev Tools" "SAFE" "rm"
+
+  # Flutter/Dart
+  scan_target "Pub Cache (Flutter)"  "$HOME/.pub-cache"              "Dev Tools" "SAFE" "rm"
+
+  # Python
+  scan_target "pip Cache (Library)"  "$HOME/Library/Caches/pip"      "Dev Tools" "SAFE" "rm"
+  scan_target "pip Cache (dotcache)" "$HOME/.cache/pip"              "Dev Tools" "SAFE" "rm"
+  scan_target "pyenv Versions"       "$HOME/.pyenv/versions"         "Dev Tools" "SAFE" "rm"
+
+  # Ruby
+  scan_target "rbenv Versions"      "$HOME/.rbenv/versions"          "Dev Tools" "SAFE" "rm"
+  scan_target "Ruby Gems"           "$HOME/.gem"                     "Dev Tools" "SAFE" "rm"
+  scan_target "Bundler Cache"       "$HOME/.bundle/cache"            "Dev Tools" "SAFE" "rm"
+
+  # Android
+  scan_target "Android AVDs"        "$HOME/.android/avd"             "Dev Tools" "SAFE" "rm"
+
+  # JetBrains IDEs
+  scan_target "JetBrains Caches"    "$HOME/Library/Caches/JetBrains" "Dev Tools" "SAFE" "rm"
+  scan_target "JetBrains Data"      "$HOME/Library/Application Support/JetBrains" "Dev Tools" "SAFE" "rm"
+
+  # VS Code
+  scan_target "VS Code CachedData"  "$HOME/Library/Application Support/Code/CachedData"          "Dev Tools" "SAFE" "rm"
+  scan_target "VS Code Workspaces"  "$HOME/Library/Application Support/Code/User/workspaceStorage" "Dev Tools" "SAFE" "rm"
+
+  tc_count=0; tc_kb=0
+  for ((i=tc_start; i<${#T_NAMES[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((tc_count++)) && tc_kb=$((tc_kb + T_SIZES[$i]))
+  done
+  cat_footer "$tc_count" "$tc_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# PHASE: App Data
 # ════════════════════════════════════════════════════════════════════════════
 
 if matches_profile "App"; then
