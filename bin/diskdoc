@@ -911,7 +911,11 @@ if matches_profile "App"; then
   cat_header "App Data" "$MAGENTA"
   app_start=${#T_NAMES[@]}
 
-  scan_target "Docker Data"          "$HOME/Library/Containers/com.docker.docker/Data"             "App" "SAFE" "rm"
+  if has_cmd docker; then
+    scan_target "Docker Data"        "$HOME/Library/Containers/com.docker.docker/Data"             "App" "SAFE" "docker-prune"
+  else
+    scan_target "Docker Data"        "$HOME/Library/Containers/com.docker.docker/Data"             "App" "SAFE" "rm"
+  fi
   scan_target "Claude VM Bundles"    "$HOME/Library/Application Support/Claude/vm_bundles"         "App" "SAFE" "rm"
   scan_target "Claude Cache"         "$HOME/Library/Application Support/Claude/Cache"              "App" "SAFE" "rm"
   scan_target "Claude Code Cache"    "$HOME/Library/Application Support/Claude/Code Cache"         "App" "SAFE" "rm"
@@ -1377,6 +1381,7 @@ if [[ "$DRY_RUN" == true ]]; then
       xcrun-sim)    cmd="xcrun simctl delete unavailable" ;;
       qlmanage-reset) cmd="qlmanage -r cache && rm -rf \"$path\"" ;;
       find-artifact)  cmd="find \"$path\" -name '${name%% (*}' -maxdepth 5 -type d -exec rm -rf {} +" ;;
+      docker-prune)   cmd="docker system prune -a --volumes -f" ;;
     esac
 
     printf "  ${DIM}[%2d]${NC} %-36s  ${DIM}%s${NC}\n" "$idx" "$name" "$cmd"
@@ -1501,6 +1506,9 @@ for entry in "${SORTED[@]}"; do
       artifact_name="${name%% (*}"
       find "$path" -name "$artifact_name" -maxdepth 5 -type d -exec rm -rf {} + 2>/dev/null
       ok=true
+      ;;
+    docker-prune)
+      docker system prune -a --volumes -f &>/dev/null && ok=true
       ;;
   esac
 
