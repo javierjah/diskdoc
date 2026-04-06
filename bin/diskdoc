@@ -397,6 +397,63 @@ scan_target() {
   fi
 }
 
+# Scan directory for VM bundles or individual items, report each one separately
+# scan_vm_bundle dir extension category risk [method]
+# Example: scan_vm_bundle ~/Parallels .pvm "Virtualization" "REBUILD"
+scan_vm_bundle() {
+  local dir="$1" ext="$2" cat="$3" risk="$4" method="${5:-rm}"
+  [[ -d "$dir" ]] || return 0
+  matches_profile "$cat" || return 0
+
+  while IFS= read -r bundle; do
+    [[ -d "$bundle" ]] || continue
+    local bname
+    bname=$(basename "$bundle" "$ext")
+    is_excluded "$bundle" && continue
+
+    local kb
+    kb=$(get_kb "$bundle")
+    if (( kb > MIN_SIZE_KB )); then
+      T_NAMES+=("$bname")
+      T_PATHS+=("$bundle")
+      T_SIZES+=("$kb")
+      T_CATS+=("$cat")
+      T_RISKS+=("$risk")
+      T_METHODS+=("$method")
+      FOUND_TOTAL=$((FOUND_TOTAL + kb))
+      log "  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "$bname" "$(fmt "$kb")"
+    fi
+  done < <(find "$dir" -maxdepth 1 -name "*${ext}" -type d 2>/dev/null)
+}
+
+# Scan a directory and report each subdirectory as individual item
+# scan_dir_items dir prefix category risk [method]
+scan_dir_items() {
+  local dir="$1" prefix="$2" cat="$3" risk="$4" method="${5:-rm}"
+  [[ -d "$dir" ]] || return 0
+  matches_profile "$cat" || return 0
+
+  for subdir in "$dir"/*/; do
+    [[ -d "$subdir" ]] || continue
+    local sname
+    sname=$(basename "$subdir")
+    is_excluded "$subdir" && continue
+
+    local kb
+    kb=$(get_kb "$subdir")
+    if (( kb > MIN_SIZE_KB )); then
+      T_NAMES+=("$prefix$sname")
+      T_PATHS+=("$subdir")
+      T_SIZES+=("$kb")
+      T_CATS+=("$cat")
+      T_RISKS+=("$risk")
+      T_METHODS+=("$method")
+      FOUND_TOTAL=$((FOUND_TOTAL + kb))
+      log "  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "$prefix$sname" "$(fmt "$kb")"
+    fi
+  done
+}
+
 # ── History ──────────────────────────────────────────────────────────────────
 
 HISTORY_DIR="$HOME/.diskdoc"
@@ -1669,6 +1726,64 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
     [[ "${T_NAMES[$i]}" == "Ghost:"* ]] && ((ghost_count++)) && ghost_kb=$((ghost_kb + T_SIZES[$i]))
   done
   cat_footer "$ghost_count" "$ghost_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# TIER 1: Massive impact categories (20-500+ GB each)
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── A1-A3: Virtualization — Parallels, VMware, UTM ─────────────────────────
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Virtualization" "$YELLOW"
+  vm_start=${#T_NAMES[@]}
+
+  # A1: Parallels Desktop
+  scan_vm_bundle "$HOME/Parallels" ".pvm" "Virtualization" "REBUILD"
+  scan_vm_bundle "$HOME/Parallels" ".macvm" "Virtualization" "REBUILD"
+  scan_vm_bundle "$HOME/Documents/Parallels" ".pvm" "Virtualization" "REBUILD"
+  scan_vm_bundle "/Users/Shared/Parallels" ".pvm" "Virtualization" "REBUILD"
+  # App Store sandboxed Parallels
+  local _prl_appstore="$HOME/Library/Group Containers/4C6364ACXT.com.parallels.desktop.appstore/Shared/Parallels"
+  scan_vm_bundle "$_prl_appstore" ".pvm" "Virtualization" "REBUILD"
+  scan_target "Parallels Prefs" "$HOME/Library/Preferences/Parallels" "Virtualization" "SAFE" "rm"
+  scan_target "Parallels Support" "$HOME/Library/Application Support/Parallels" "Virtualization" "SAFE" "rm"
+
+  # A2: VMware Fusion
+  scan_vm_bundle "$HOME/Virtual Machines" ".vmwarevm" "Virtualization" "REBUILD"
+  scan_vm_bundle "$HOME/Documents/Virtual Machines" ".vmwarevm" "Virtualization" "REBUILD"
+  scan_target "VMware Fusion Support" "$HOME/Library/Application Support/VMware Fusion" "Virtualization" "SAFE" "rm"
+
+  # A3: UTM
+  local _utm_sandboxed="$HOME/Library/Containers/com.utmapp.UTM/Data/Documents"
+  scan_vm_bundle "$_utm_sandboxed" ".utm" "Virtualization" "REBUILD"
+  # Non-sandboxed UTM stores .utm in ~/Documents
+  if [[ -d "$HOME/Documents" ]]; then
+    while IFS= read -r utm_bundle; do
+      [[ -d "$utm_bundle" ]] || continue
+      local bname
+      bname=$(basename "$utm_bundle" ".utm")
+      is_excluded "$utm_bundle" && continue
+      local kb
+      kb=$(get_kb "$utm_bundle")
+      if (( kb > MIN_SIZE_KB )); then
+        T_NAMES+=("UTM: $bname")
+        T_PATHS+=("$utm_bundle")
+        T_SIZES+=("$kb")
+        T_CATS+=("Virtualization")
+        T_RISKS+=("REBUILD")
+        T_METHODS+=("rm")
+        FOUND_TOTAL=$((FOUND_TOTAL + kb))
+        log "  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "UTM: $bname" "$(fmt "$kb")"
+      fi
+    done < <(find "$HOME/Documents" -maxdepth 1 -name "*.utm" -type d 2>/dev/null)
+  fi
+
+  vm_count=0; vm_kb=0
+  for ((i=vm_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Virtualization" ]] && ((vm_count++)) && vm_kb=$((vm_kb + T_SIZES[$i]))
+  done
+  cat_footer "$vm_count" "$vm_kb"
 fi
 
 # ── Scan summary ─────────────────────────────────────────────────────────────
