@@ -23,6 +23,14 @@
 # shellcheck disable=SC2059,SC2004
 set -uo pipefail
 
+# ── Require bash 4+ ─────────────────────────────────────────────────────────
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "diskdoc v3 requires bash 4+. Install with: brew install bash"
+  echo "Your system bash (${BASH_VERSION}) is from 2007 because Apple refuses"
+  echo "to update it due to GPLv3 licensing — another classic Apple move."
+  exit 1
+fi
+
 VERSION="3.0.0"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
@@ -161,6 +169,48 @@ if [[ "$(uname)" != "Darwin" ]]; then
   echo "diskdoc only runs on macOS."
   exit 1
 fi
+
+# ── macOS version detection ─────────────────────────────────────────────────
+MACOS_MAJOR=""
+MACOS_MINOR=""
+MACOS_CODENAME=""
+MACOS_MAIL_V=""
+
+detect_macos_version() {
+  local ver
+  ver=$(sw_vers -productVersion)
+  MACOS_MAJOR="${ver%%.*}"
+  local rest="${ver#*.}"
+  MACOS_MINOR="${rest%%.*}"
+
+  case "$MACOS_MAJOR" in
+    10) case "$MACOS_MINOR" in
+          14) MACOS_CODENAME="Mojave" ;;
+          15) MACOS_CODENAME="Catalina" ;;
+          *)  MACOS_CODENAME="macOS 10.${MACOS_MINOR}" ;;
+        esac ;;
+    11) MACOS_CODENAME="Big Sur" ;;
+    12) MACOS_CODENAME="Monterey" ;;
+    13) MACOS_CODENAME="Ventura" ;;
+    14) MACOS_CODENAME="Sonoma" ;;
+    15) MACOS_CODENAME="Sequoia" ;;
+    26) MACOS_CODENAME="Tahoe" ;;
+    *)  MACOS_CODENAME="macOS ${MACOS_MAJOR}" ;;
+  esac
+
+  case "$MACOS_MAJOR" in
+    10) if [[ "$MACOS_MINOR" == "14" ]]; then
+          MACOS_MAIL_V="V6"
+        else
+          MACOS_MAIL_V="V7"
+        fi ;;
+    11) MACOS_MAIL_V="V8" ;;
+    12) MACOS_MAIL_V="V9" ;;
+    *)  MACOS_MAIL_V="V10" ;;
+  esac
+}
+
+detect_macos_version
 
 # ── Exclusions (~/.diskdocrc) ────────────────────────────────────────────────
 declare -a EXCLUDES=()
