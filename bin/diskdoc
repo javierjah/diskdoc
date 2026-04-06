@@ -93,19 +93,19 @@ Usage:
   diskdoc --dev-artifacts    Deep scan for build artifacts in code dirs
   diskdoc --json             Output scan results as JSON (implies --scan)
   diskdoc --min-size N       Minimum size in MB to include (default: 50)
-  diskdoc --profile PROFILE  Filter by profile: all, dev, system, apps
+  diskdoc --profile PROFILE  Filter: all, dev, system, apps, personal
   diskdoc --no-color         Disable colored output
-  diskdoc doctor             Diagnose disk usage (top 20 consumers)
+  diskdoc doctor             Diagnose disk usage (top consumers)
   diskdoc history            Show cleanup history
   diskdoc --version          Show version
   diskdoc --help             Show this help
 
 Profiles:
   all      Everything (default)
-  dev      Dev tools + package managers + node_modules + Rust targets
-  system   System caches + logs + Trash
-  apps     Application data + media (Docker, Claude, ChatGPT, etc.)
-  personal Personal data (Mail, Messages, iCloud, Photos — report only)
+  dev      Dev tools + package managers + build artifacts
+  system   System caches, logs, Trash, /var/folders, Spotlight
+  apps     App data, media, virtualization, browsers, creative, mail
+  personal Personal data (Mail DB, Messages, iCloud, Photos, browser data)
 
 Exclusions:
   Create ~/.diskdocrc to permanently exclude paths:
@@ -113,13 +113,26 @@ Exclusions:
     ~/Library/Android
     ~/Library/Developer/Xcode/DerivedData/MyProject
 
-What it cleans:
-  System       Trash, Apple screensaver cache, system logs, iOS backups
-  Dev Tools    Xcode DerivedData/Archives/Simulators, Android SDK, CocoaPods,
-               Gradle, Go modules, node_modules, Rust build targets
-  App Data     Docker, Claude, ChatGPT, Kiro, Windsurf, Cursor, Mail cache
+What it scans:
+  System       Trash, screensavers, APFS snapshots, logs, diagnostics,
+               /var/folders, Spotlight index, QuickLook/font caches
+  Virtualization  Parallels, VMware, UTM, Lima, Colima, OrbStack, Tart,
+               Vagrant, VirtualBox, Multipass, Docker.raw
+  Dev Tools    Xcode, Android SDK, CocoaPods, Gradle, Go, Rust, Python,
+               Ruby, Flutter, JetBrains, VS Code, Unity, Unreal, Bazel
+  Build Artifacts  node_modules, Rust target/, build/ (--dev-artifacts)
+  App Data     Docker, Claude, ChatGPT, Kiro, Windsurf, Cursor, Slack,
+               Discord, Notion
+  Browser      Chromium browsers (multi-profile), Safari, Firefox
+  Creative     Adobe CC, Lightroom, DaVinci Resolve
+  Mail         Mail database (versioned V6-V10), Mail downloads
+  Media        Apple TV, Music, Podcasts, Books, GarageBand, Logic,
+               Final Cut Pro
   Caches       Any ~/Library/Caches/* entry over the size threshold
-  Pkg Mgrs     npm, pnpm, yarn, pip, Homebrew
+  Pkg Mgrs     npm, pnpm, yarn, pip, Homebrew, Caskroom
+  Ghost Apps   Caches from apps you already uninstalled
+  Untouchable  dyld cache, Rosetta 2, sleepimage, swap, Updates
+               (report-only — never deletable)
 
 Risk levels:
   SAFE        Regenerates without effort (caches, build artifacts)
