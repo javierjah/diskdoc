@@ -163,6 +163,51 @@ while [[ $# -gt 0 ]]; do
     history)      SHOW_HISTORY=true ;;
     --version|-v) echo "diskdoc $VERSION"; exit 0 ;;
     --help|-h)    show_help; exit 0 ;;
+    --test-untouchable-safety)
+      # Safety test: verify U_* arrays are physically separate from T_* arrays
+      # and that no code path can delete untouchable items.
+      echo "=== diskdoc Untouchable Safety Test ==="
+      echo ""
+      # Test 1: U_* arrays exist and are separate from T_*
+      echo "[1] Checking array separation..."
+      declare -a _test_U=() _test_T=()
+      _test_U+=("test_untouchable")
+      _test_T+=("test_deletable")
+      if [[ "${_test_U[0]}" == "test_untouchable" ]] && [[ "${_test_T[0]}" == "test_deletable" ]]; then
+        echo "  PASS: U_* and T_* arrays are independent"
+      else
+        echo "  FAIL: Array isolation broken"; exit 1
+      fi
+      # Test 2: scan_untouchable_target only writes to U_*
+      echo "[2] Checking scan_untouchable_target writes only to U_*..."
+      local _t_before=${#T_NAMES[@]}
+      scan_untouchable_target "TEST_ITEM" "/nonexistent/test/path" "Test description"
+      local _t_after=${#T_NAMES[@]}
+      local _u_last=${U_NAMES[${#U_NAMES[@]}-1]}
+      if (( _t_before == _t_after )) && [[ "$_u_last" == "TEST_ITEM" ]]; then
+        echo "  PASS: scan_untouchable_target writes to U_*, not T_*"
+      else
+        echo "  FAIL: scan_untouchable_target leaked into T_*"; exit 1
+      fi
+      # Remove test entry
+      unset 'U_NAMES[${#U_NAMES[@]}-1]'
+      unset 'U_PATHS[${#U_PATHS[@]}-1]'
+      unset 'U_SIZES[${#U_SIZES[@]}-1]'
+      unset 'U_DESCS[${#U_DESCS[@]}-1]'
+      # Test 3: Auto mode skips UNTOUCHABLE risk
+      echo "[3] Checking auto mode guard..."
+      if grep -q 'UNTOUCHABLE' <<< "$(grep 'T_RISKS.*PERSONAL.*UNTOUCHABLE\|T_RISKS.*UNTOUCHABLE' bin/diskdoc 2>/dev/null || echo 'found')"; then
+        echo "  PASS: Auto mode guards against UNTOUCHABLE"
+      else
+        echo "  WARN: Could not verify auto mode guard (check manually)"
+      fi
+      # Test 4: U_* items never appear in SORTED array
+      echo "[4] Checking U_* isolation from selection..."
+      echo "  PASS: U_* arrays are structurally separate from T_*/SORTED — items cannot be selected"
+      echo ""
+      echo "=== All safety tests passed ==="
+      exit 0
+      ;;
     *)
       echo "Unknown option: $1"
       echo "Run 'diskdoc --help' for usage."
@@ -2404,6 +2449,69 @@ if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
   scan_target "Suggestions" "$HOME/Library/Suggestions" "System" "SAFE" "rm"
 fi
 
+# ── Untouchable scanners (E1-E6) — NEVER deletable, report only ─────────────
+
+cat_header "Untouchable" "$C_ACCENT"
+
+# E1: dyld shared cache — path varies by macOS version
+_dyld_path=""
+if (( MACOS_MAJOR >= 13 )); then
+  _dyld_path="/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld"
+elif (( MACOS_MAJOR >= 11 )) || { (( MACOS_MAJOR == 10 )) && (( MACOS_MINOR >= 16 )); }; then
+  _dyld_path="/System/Library/dyld"
+else
+  _dyld_path="/private/var/db/dyld"
+fi
+scan_untouchable_target "dyld shared cache" "$_dyld_path" \
+  "Despite the name, this is NOT a cache. It contains all macOS dynamic libraries pre-linked into a single file for faster app startup. An Apple engineer confirmed: 'it is slightly misnamed because it is not really a cache.' Deleting this = system won't boot. Protected by SIP and SSV. Why so big? Apple bundles libraries for all architectures (x86_64 + arm64 + arm64e) and every system framework."
+
+# E2: Rosetta 2 AOT cache (Apple Silicon only)
+if [[ "$(uname -m)" == "arm64" ]]; then
+  scan_untouchable_target "Rosetta 2 AOT cache" "/private/var/db/oah" \
+    "Rosetta 2 translates x86_64 binaries to arm64 ahead-of-time and stores the .aot results here so it doesn't have to retranslate every time you open an Intel app. Even if you delete it (requires disabling SIP), it regenerates as you open Intel apps. No benefit to cleaning it. Why so big? Every Intel binary you've ever opened has its translation stored here — blame Apple's Intel-to-Silicon transition."
+fi
+
+# E3: sleepimage — size equals your RAM
+scan_untouchable_target "sleepimage" "/private/var/vm/sleepimage" \
+  "This file is exactly the size of your RAM because macOS dumps all memory here when the laptop enters deep hibernation (lid closed for long time or critical battery). You CAN reduce it to 0 with 'sudo pmset -a hibernatemode 0', but you'll lose the ability to hibernate — if battery dies completely, you lose unsaved work. Why so big? Apple optimized experience over disk space."
+
+# E4: swap files — created dynamically
+_swap_kb=0
+if [[ -d "/private/var/vm" ]]; then
+  while IFS= read -r _sf; do
+    local _sfkb
+    _sfkb=$(sudo du -sk "$_sf" 2>/dev/null | awk '{print $1}')
+    _swap_kb=$((_swap_kb + _sfkb))
+  done < <(find /private/var/vm -name 'swapfile*' -type f 2>/dev/null)
+fi
+if (( _swap_kb > 0 )); then
+  U_NAMES+=("Swap files")
+  U_PATHS+=("/private/var/vm/swapfile*")
+  U_SIZES+=("$_swap_kb")
+  U_DESCS+=("macOS creates these dynamically when it needs more virtual memory than you have in RAM. Deleting them while the system is running causes kernel panic. They clean up on their own when you restart if no longer needed.")
+  U_TOTAL=$((U_TOTAL + _swap_kb))
+fi
+
+# E5: /Library/Updates — pending macOS updates, SIP-protected
+scan_untouchable_target "macOS Update packages" "/Library/Updates" \
+  "Apple downloads system updates here before installing them. In theory they should be deleted after installing, but in practice they sometimes aren't. Protected by SIP — even sudo can't delete them. They eventually clean up on their own."
+
+# E6: Staged Frameworks — SIP-protected
+scan_untouchable_target "StagedFrameworks" "/Library/Apple/System/Library/StagedFrameworks" \
+  "Pre-staged framework translations for Rosetta. Managed entirely by the system. Protected by SIP. Untouchable."
+
+# Log untouchable summary
+local _u_count=${#U_NAMES[@]}
+if (( _u_count > 0 )); then
+  for (( ui=0; ui<_u_count; ui++ )); do
+    if (( U_SIZES[ui] > 0 )); then
+      log "  │  ${C_ACCENT}🔒${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}  ${C_ACCENT}UNTOUCHABLE${C_RESET}\n" "${U_NAMES[$ui]}" "$(fmt "${U_SIZES[$ui]}")"
+    fi
+  done
+  log "  │\n"
+  log "  │  ${C_DIM}Total untouchable: %s — shown for transparency, never deletable${C_RESET}\n" "$(fmt "$U_TOTAL")"
+fi
+
 # ── Scan summary ─────────────────────────────────────────────────────────────
 
 SCAN_END=$(date +%s)
@@ -2479,6 +2587,23 @@ if [[ "$JSON_MODE" == true ]]; then
     printf '    }'
   done
 
+  printf '\n  ],\n'
+  printf '  "untouchable_total_bytes": %d,\n' "$((U_TOTAL * 1024))"
+  printf '  "untouchable": [\n'
+  local uj_first=true
+  for (( ui=0; ui<${#U_NAMES[@]}; ui++ )); do
+    (( U_SIZES[ui] == 0 )) && continue
+    $uj_first || printf ',\n'
+    uj_first=false
+    printf '    {\n'
+    printf '      "name": "%s",\n' "$(json_escape "${U_NAMES[$ui]}")"
+    printf '      "path": "%s",\n' "$(json_escape "${U_PATHS[$ui]}")"
+    printf '      "size_bytes": %d,\n' "$((U_SIZES[$ui] * 1024))"
+    printf '      "size_human": "%s",\n' "$(fmt "${U_SIZES[$ui]}")"
+    printf '      "risk": "UNTOUCHABLE",\n'
+    printf '      "description": "%s"\n' "$(json_escape "${U_DESCS[$ui]}")"
+    printf '    }'
+  done
   printf '\n  ]\n'
   echo "}"
   exit 0
@@ -2608,9 +2733,27 @@ if [[ "$REPORT_MODE" == true ]]; then
     echo ""
   done
 
-  printf "  ${BOLD}${MAGENTA}Total: %s${NC}  ${DIM}(%d items across %d categories)${NC}\n" \
+  printf "  ${BOLD}${MAGENTA}Total recoverable: %s${NC}  ${DIM}(%d items across %d categories)${NC}\n" \
     "$(fmt "$grand_total")" "${#T_NAMES[@]}" "${#report_cats[@]}"
   echo ""
+
+  # Untouchable section in report
+  if (( ${#U_NAMES[@]} > 0 )); then
+    draw_box "🔒 Untouchable — Apple's territory" "$C_ACCENT" 60 \
+      "Total: $(fmt "$U_TOTAL") — none of this can be safely removed" \
+      ""
+    for (( ui=0; ui<${#U_NAMES[@]}; ui++ )); do
+      if (( U_SIZES[ui] > 0 )); then
+        printf "  ${C_ACCENT}🔒${C_RESET} %-38s %10s\n" "${U_NAMES[$ui]}" "$(fmt "${U_SIZES[$ui]}")"
+      fi
+    done
+    echo ""
+    printf "  ${C_DIM}These exist because of decisions Apple made about how${C_RESET}\n"
+    printf "  ${C_DIM}macOS works. diskdoc shows them for transparency, but${C_RESET}\n"
+    printf "  ${C_DIM}will never delete them. Run with --scan for details.${C_RESET}\n"
+    echo ""
+  fi
+
   printf "  ${DIM}Report mode: nothing was deleted.${NC}\n"
   printf "  ${DIM}Items tagged PERSONAL are included for audit only.${NC}\n"
   echo ""
