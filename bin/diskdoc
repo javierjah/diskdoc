@@ -257,11 +257,11 @@ matches_profile() {
   local cat="$1"
   [[ "$PROFILE" == "all" ]] && return 0
   case "$PROFILE" in
-    dev)    [[ "$cat" == "Dev Tools" || "$cat" == "Pkg Manager" ]] ;;
-    system) [[ "$cat" == "System" || "$cat" == "Cache" || "$cat" == "Logs" ]] ;;
-    apps)   [[ "$cat" == "App" || "$cat" == "Media" ]] ;;
-    personal) [[ "$cat" == "Personal" ]] ;;
-    *)      return 0 ;;
+    dev)      [[ "$cat" == "Dev Tools" || "$cat" == "Pkg Manager" ]] ;;
+    system)   [[ "$cat" == "System" || "$cat" == "System Temp" || "$cat" == "Cache" || "$cat" == "Logs" ]] ;;
+    apps)     [[ "$cat" == "App" || "$cat" == "Media" || "$cat" == "Creative" || "$cat" == "Virtualization" || "$cat" == "Browser" || "$cat" == "Mail" ]] ;;
+    personal) [[ "$cat" == "Personal" || "$cat" == "Browser Personal" ]] ;;
+    *)        return 0 ;;
   esac
 }
 
@@ -2011,6 +2011,399 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   scan_target "Telegram Media" "$HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram" "App" "PERSONAL" "rm"
 fi
 
+# ════════════════════════════════════════════════════════════════════════════
+# TIER 2: Large impact categories (5-100+ GB)
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── B1: Browser Service Worker Caches (generic Chromium function) ──────────
+
+declare -a CHROMIUM_NAMES=("Chrome" "Edge" "Brave" "Arc" "Vivaldi" "Opera")
+declare -a CHROMIUM_PATHS=(
+  "$HOME/Library/Application Support/Google/Chrome"
+  "$HOME/Library/Application Support/Microsoft Edge"
+  "$HOME/Library/Application Support/BraveSoftware/Brave-Browser"
+  "$HOME/Library/Application Support/Arc/User Data"
+  "$HOME/Library/Application Support/Vivaldi"
+  "$HOME/Library/Application Support/com.operasoftware.Opera"
+)
+
+scan_chromium_caches() {
+  local browser_name="$1" base_path="$2"
+  [[ -d "$base_path" ]] || return 0
+
+  local cache_dirs=("Service Worker/CacheStorage" "Service Worker/ScriptCache" "Code Cache" "GPUCache" "Application Cache")
+
+  for profile_dir in "$base_path"/Default "$base_path"/Profile\ *; do
+    [[ -d "$profile_dir" ]] || continue
+    local profile_name
+    profile_name=$(basename "$profile_dir")
+
+    for cdir in "${cache_dirs[@]}"; do
+      local full_path="${profile_dir}/${cdir}"
+      [[ -d "$full_path" ]] || continue
+      local cname
+      cname=$(basename "$cdir")
+      scan_target "${browser_name} ${profile_name} ${cname}" "$full_path" "Browser" "SAFE" "rm"
+    done
+  done
+}
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Browser Caches" "$CYAN"
+  br_start=${#T_NAMES[@]}
+
+  for ((bi=0; bi<${#CHROMIUM_NAMES[@]}; bi++)); do
+    scan_chromium_caches "${CHROMIUM_NAMES[$bi]}" "${CHROMIUM_PATHS[$bi]}"
+  done
+
+  # B3: Safari
+  scan_target "Safari Cache" "$HOME/Library/Caches/com.apple.Safari" "Browser" "SAFE" "rm"
+  scan_target "Safari SafeBrowsing" "$HOME/Library/Caches/com.apple.Safari.SafeBrowsing" "Browser" "SAFE" "rm"
+  scan_target "Safari WebKit Net" "$HOME/Library/Caches/com.apple.WebKit.Networking" "Browser" "SAFE" "rm"
+  scan_target "Safari WebKit Content" "$HOME/Library/Caches/com.apple.WebKit.WebContent" "Browser" "SAFE" "rm"
+  scan_target "Safari WebKit GPU" "$HOME/Library/Caches/com.apple.WebKit.GPU" "Browser" "SAFE" "rm"
+  scan_target "Safari Container Cache" "$HOME/Library/Containers/com.apple.Safari/Data/Library/Caches" "Browser" "SAFE" "rm"
+  scan_target "Safari Favicon Cache" "$HOME/Library/Safari/Favicon Cache" "Browser" "SAFE" "rm"
+  scan_target "Safari Touch Icons" "$HOME/Library/Safari/Touch Icons Cache" "Browser" "SAFE" "rm"
+
+  # B4: Firefox
+  for ff_profile in "$HOME/Library/Application Support/Firefox/Profiles/"*/; do
+    [[ -d "$ff_profile" ]] || continue
+    local ff_name
+    ff_name=$(basename "$ff_profile")
+    scan_target "Firefox cache ($ff_name)" "${ff_profile}cache2/entries" "Browser" "SAFE" "rm"
+    scan_target "Firefox startup ($ff_name)" "${ff_profile}startupCache" "Browser" "SAFE" "rm"
+  done
+  for ff_cache in "$HOME/Library/Caches/Firefox/Profiles/"*/; do
+    [[ -d "$ff_cache" ]] || continue
+    scan_target "Firefox cache2" "${ff_cache}cache2" "Browser" "SAFE" "rm"
+  done
+
+  br_count=0; br_kb=0
+  for ((i=br_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Browser" ]] && ((br_count++)) && br_kb=$((br_kb + T_SIZES[$i]))
+  done
+  cat_footer "$br_count" "$br_kb"
+fi
+
+# ── B2: Browser personal data (report only) ──────────────────────────────
+
+if [[ "$REPORT_MODE" == true ]] || matches_profile "Personal"; then
+  cat_header "Browser Personal Data" "$MAGENTA"
+  bp_start=${#T_NAMES[@]}
+
+  for ((bi=0; bi<${#CHROMIUM_NAMES[@]}; bi++)); do
+    local _bp_base="${CHROMIUM_PATHS[$bi]}"
+    [[ -d "$_bp_base" ]] || continue
+    for profile_dir in "$_bp_base"/Default "$_bp_base"/Profile\ *; do
+      [[ -d "$profile_dir" ]] || continue
+      scan_target "${CHROMIUM_NAMES[$bi]} IndexedDB" "${profile_dir}/IndexedDB" "Browser Personal" "PERSONAL" "rm"
+      scan_target "${CHROMIUM_NAMES[$bi]} File System" "${profile_dir}/File System" "Browser Personal" "PERSONAL" "rm"
+    done
+  done
+
+  # Safari personal
+  scan_target "Safari LocalStorage" "$HOME/Library/Safari/LocalStorage" "Browser Personal" "PERSONAL" "rm"
+  scan_target "Safari Databases" "$HOME/Library/Safari/Databases" "Browser Personal" "PERSONAL" "rm"
+  scan_target "Safari History" "$HOME/Library/Safari/History.db" "Browser Personal" "PERSONAL" "rm"
+
+  # Firefox personal
+  for ff_profile in "$HOME/Library/Application Support/Firefox/Profiles/"*/; do
+    [[ -d "$ff_profile" ]] || continue
+    scan_target "Firefox storage" "${ff_profile}storage" "Browser Personal" "PERSONAL" "rm"
+  done
+
+  bp_count=0; bp_kb=0
+  for ((i=bp_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Browser Personal" ]] && ((bp_count++)) && bp_kb=$((bp_kb + T_SIZES[$i]))
+  done
+  cat_footer "$bp_count" "$bp_kb"
+fi
+
+# ── B5-B17: Various Tier 2 categories ────────────────────────────────────
+
+if matches_profile "Dev Tools" || matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  # B5: Conda/Anaconda/Miniconda
+  for conda_dir in "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/opt/miniconda3" "$HOME/opt/anaconda3"; do
+    [[ -d "$conda_dir" ]] || continue
+    local cname
+    cname=$(basename "$conda_dir")
+    scan_target "$cname pkgs (cache)" "${conda_dir}/pkgs" "Dev Tools" "SAFE" "rm"
+    scan_dir_items "${conda_dir}/envs" "$cname env: " "Dev Tools" "REBUILD"
+  done
+fi
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  # B6: Cloud storage caches
+  scan_target "Dropbox Cache" "$HOME/Dropbox/.dropbox.cache" "App" "SAFE" "rm"
+  scan_target "Dropbox File Clones" "$HOME/Library/Group Containers/G7HH3F8CAK.com.getdropbox.dropbox.sync/file_clones" "App" "SAFE" "rm"
+  scan_target "OneDrive Suite" "$HOME/Library/Group Containers/UBF8T346G9.OneDriveStandaloneSuite" "App" "SAFE" "rm"
+
+  # B7: Signal
+  scan_target "Signal Attachments" "$HOME/Library/Application Support/Signal/attachments.noindex" "App" "PERSONAL" "rm"
+
+  # B8: Zoom recordings
+  scan_target "Zoom Recordings" "$HOME/Documents/Zoom" "App" "PERSONAL" "rm"
+
+  # B9: Teams
+  scan_target "Teams (new)" "$HOME/Library/Group Containers/UBF8T346G9.com.microsoft.teams" "App" "SAFE" "rm"
+  scan_target "Teams (classic)" "$HOME/Library/Application Support/Microsoft/Teams" "App" "SAFE" "rm"
+
+  # B10: Spotify
+  scan_target "Spotify Stream Cache" "$HOME/Library/Caches/com.spotify.client/Data" "App" "SAFE" "rm"
+  scan_target "Spotify Offline" "$HOME/Library/Application Support/Spotify/PersistentCache/Storage" "App" "REBUILD" "rm"
+
+  # B11: Steam
+  scan_target "Steam Downloads" "$HOME/Library/Application Support/Steam/steamapps/downloading" "App" "SAFE" "rm"
+  scan_target "Steam Shader Cache" "$HOME/Library/Application Support/Steam/steamapps/shadercache" "App" "SAFE" "rm"
+  scan_target "Steam Workshop" "$HOME/Library/Application Support/Steam/steamapps/workshop" "App" "REBUILD" "rm"
+fi
+
+if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
+  # B12: Unity
+  scan_target "Unity Asset Store" "$HOME/Library/Unity/Asset Store-5.x" "Dev Tools" "SAFE" "rm"
+  scan_target "Unity Cache" "$HOME/Library/Unity/cache" "Dev Tools" "SAFE" "rm"
+  scan_target "Unity Editor Cache" "$HOME/Library/Caches/com.unity3d.UnityEditor" "Dev Tools" "SAFE" "rm"
+
+  # B13: Unreal Engine
+  scan_target "Unreal Engine" "$HOME/Library/Application Support/Epic/UnrealEngine" "Dev Tools" "REBUILD" "rm"
+  scan_target "Unreal DerivedData" "$HOME/Library/Application Support/Epic/DerivedDataCache" "Dev Tools" "SAFE" "rm"
+
+  # B14: Bazel
+  scan_target "Bazel cache (new)" "$HOME/.cache/bazel" "Dev Tools" "SAFE" "rm"
+  scan_target "Bazel cache (legacy)" "/private/var/tmp/_bazel_${USER}" "Dev Tools" "SAFE" "rm-sudo"
+fi
+
+if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
+  # B15: Previously Relocated Items
+  scan_target "Previously Relocated" "/Users/Shared/Previously Relocated Items" "System" "SAFE" "rm"
+
+  # B17: Saved Application State
+  scan_target "Saved App State" "$HOME/Library/Saved Application State" "System" "SAFE" "rm"
+fi
+
+if has_cmd brew && (matches_profile "Pkg Manager" || [[ "$PROFILE" == "all" ]]); then
+  # B16: Homebrew Caskroom .dmg/.pkg files
+  local _caskroom
+  _caskroom="$(brew --prefix 2>/dev/null)/Caskroom"
+  if [[ -d "$_caskroom" ]]; then
+    log "\r\033[K  │  ${C_DIM}…${C_RESET}  %-44s" "Caskroom installers"
+    local cask_kb
+    cask_kb=$(find "$_caskroom" -type f \( -name '*.dmg' -o -name '*.pkg' \) -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
+    if (( cask_kb > MIN_SIZE_KB )); then
+      T_NAMES+=("Homebrew Caskroom installers")
+      T_PATHS+=("$_caskroom")
+      T_SIZES+=("$cask_kb")
+      T_CATS+=("Pkg Manager")
+      T_RISKS+=("SAFE")
+      T_METHODS+=("caskroom-clean")
+      FOUND_TOTAL=$((FOUND_TOTAL + cask_kb))
+      log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "Homebrew Caskroom installers" "$(fmt "$cask_kb")"
+    else
+      log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "Caskroom installers"
+    fi
+  fi
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# TIER 3: Medium impact categories (500 MB - 20 GB)
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Language Ecosystems" "$CYAN"
+  le_start=${#T_NAMES[@]}
+
+  # C1: Julia
+  scan_target "Julia artifacts" "$HOME/.julia/artifacts" "Dev Tools" "SAFE" "rm"
+  scan_target "Julia packages" "$HOME/.julia/packages" "Dev Tools" "SAFE" "rm"
+  scan_target "Julia compiled" "$HOME/.julia/compiled" "Dev Tools" "SAFE" "rm"
+
+  # C1: Haskell
+  scan_target "Stack" "$HOME/.stack" "Dev Tools" "SAFE" "rm"
+  scan_target "Cabal" "$HOME/.cabal" "Dev Tools" "SAFE" "rm"
+  scan_target "GHCup" "$HOME/.ghcup" "Dev Tools" "SAFE" "rm"
+
+  # C1: OCaml, Perl, R, Elixir, Nim, Zig, Bun, Deno
+  scan_target "opam" "$HOME/.opam" "Dev Tools" "SAFE" "rm"
+  scan_target "CPAN" "$HOME/.cpan" "Dev Tools" "SAFE" "rm"
+  scan_target "cpanm" "$HOME/.cpanm" "Dev Tools" "SAFE" "rm"
+  scan_target "mix (Elixir)" "$HOME/.mix" "Dev Tools" "SAFE" "rm"
+  scan_target "hex (Elixir)" "$HOME/.hex" "Dev Tools" "SAFE" "rm"
+  scan_target "rebar3" "$HOME/.cache/rebar3" "Dev Tools" "SAFE" "rm"
+  scan_target "nimble" "$HOME/.nimble" "Dev Tools" "SAFE" "rm"
+  scan_target "zig cache" "$HOME/.cache/zig" "Dev Tools" "SAFE" "rm"
+  scan_target "Bun cache" "$HOME/.bun/install/cache" "Dev Tools" "SAFE" "rm"
+  scan_target "Deno cache" "$HOME/Library/Caches/deno" "Dev Tools" "SAFE" "rm"
+
+  le_count=0; le_kb=0
+  for ((i=le_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((le_count++)) && le_kb=$((le_kb + T_SIZES[$i]))
+  done
+  cat_footer "$le_count" "$le_kb"
+fi
+
+# ── C2: Version managers ─────────────────────────────────────────────────
+
+if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Version Managers" "$CYAN"
+  vm2_start=${#T_NAMES[@]}
+
+  scan_dir_items "$HOME/.nvm/versions/node" "nvm node " "Dev Tools" "REBUILD"
+  scan_dir_items "$HOME/Library/Application Support/fnm/node-versions" "fnm node " "Dev Tools" "REBUILD"
+  scan_dir_items "$HOME/.asdf/installs" "asdf: " "Dev Tools" "REBUILD"
+  scan_dir_items "$HOME/.volta/tools" "Volta: " "Dev Tools" "REBUILD"
+  scan_dir_items "$HOME/.local/share/mise/installs" "mise: " "Dev Tools" "REBUILD"
+  scan_dir_items "$HOME/.sdkman/candidates" "sdkman: " "Dev Tools" "REBUILD"
+  scan_dir_items "$HOME/.swiftenv/versions" "swiftenv: " "Dev Tools" "REBUILD"
+  scan_dir_items "$HOME/.phpenv/versions" "phpenv: " "Dev Tools" "REBUILD"
+  scan_dir_items "$HOME/.phpbrew/php" "phpbrew: " "Dev Tools" "REBUILD"
+  scan_dir_items "$HOME/.jabba/jdk" "jabba: " "Dev Tools" "REBUILD"
+
+  vm2_count=0; vm2_kb=0
+  for ((i=vm2_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((vm2_count++)) && vm2_kb=$((vm2_kb + T_SIZES[$i]))
+  done
+  cat_footer "$vm2_count" "$vm2_kb"
+fi
+
+# ── C3: Build tools ──────────────────────────────────────────────────────
+
+if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Build Tools" "$CYAN"
+  bt_start=${#T_NAMES[@]}
+
+  scan_target "Conan (v2)" "$HOME/.conan2" "Dev Tools" "SAFE" "rm"
+  scan_target "Conan (v1)" "$HOME/.conan" "Dev Tools" "SAFE" "rm"
+  scan_target "Poetry cache" "$HOME/Library/Caches/pypoetry" "Dev Tools" "SAFE" "rm"
+  scan_target "pipx venvs" "$HOME/.local/pipx/venvs" "Dev Tools" "REBUILD" "rm"
+  scan_target "pipenv venvs" "$HOME/.local/share/virtualenvs" "Dev Tools" "REBUILD" "rm"
+  scan_target "Terraform plugins" "$HOME/.terraform.d/plugins" "Dev Tools" "SAFE" "rm"
+  scan_target "Pulumi plugins" "$HOME/.pulumi/plugins" "Dev Tools" "SAFE" "rm"
+  scan_target "Swift PM cache" "$HOME/Library/Caches/org.swift.swiftpm" "Dev Tools" "SAFE" "rm"
+  scan_target "Ansible collections" "$HOME/.ansible/collections" "Dev Tools" "SAFE" "rm"
+  scan_target "Ansible roles" "$HOME/.ansible/roles" "Dev Tools" "SAFE" "rm"
+
+  bt_count=0; bt_kb=0
+  for ((i=bt_start; i<${#T_CATS[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((bt_count++)) && bt_kb=$((bt_kb + T_SIZES[$i]))
+  done
+  cat_footer "$bt_count" "$bt_kb"
+fi
+
+# ── C4: Container tools ──────────────────────────────────────────────────
+
+if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
+  scan_target "Podman (Apple HV)" "$HOME/.local/share/containers/podman/machine/applehv" "Dev Tools" "REBUILD" "rm"
+  scan_target "Podman (QEMU)" "$HOME/.local/share/containers/podman/machine/qemu" "Dev Tools" "REBUILD" "rm"
+  scan_target "Rancher Desktop" "$HOME/Library/Application Support/rancher-desktop" "Dev Tools" "REBUILD" "rm"
+  scan_dir_items "$HOME/.minikube/machines" "Minikube: " "Dev Tools" "REBUILD"
+  scan_target "Minikube cache" "$HOME/.minikube/cache" "Dev Tools" "SAFE" "rm"
+  scan_target "Helm cache" "$HOME/Library/Caches/helm/repository" "Dev Tools" "SAFE" "rm"
+  scan_target "Helm legacy" "$HOME/.helm" "Dev Tools" "SAFE" "rm"
+fi
+
+# ── C5: Creative tools ───────────────────────────────────────────────────
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  scan_target "Figma" "$HOME/Library/Application Support/Figma" "App" "SAFE" "rm"
+  scan_target "Figma Cache" "$HOME/Library/Caches/com.figma.Desktop" "App" "SAFE" "rm"
+  scan_target "Sketch" "$HOME/Library/Application Support/com.bohemiancoding.sketch3" "App" "SAFE" "rm"
+  for blender_ver in "$HOME/Library/Application Support/Blender/"*/; do
+    [[ -d "$blender_ver" ]] || continue
+    scan_target "Blender $(basename "$blender_ver")" "$blender_ver" "App" "SAFE" "rm"
+  done
+fi
+
+# ── C6: Gaming ───────────────────────────────────────────────────────────
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  scan_target "Epic Games" "/Users/Shared/Epic Games" "App" "REBUILD" "rm"
+  scan_target "Epic Games Support" "$HOME/Library/Application Support/Epic" "App" "SAFE" "rm"
+  scan_target "Battle.net" "$HOME/Library/Application Support/Blizzard" "App" "SAFE" "rm"
+  scan_target "Minecraft assets" "$HOME/Library/Application Support/minecraft/assets" "App" "SAFE" "rm"
+  scan_target "Minecraft versions" "$HOME/Library/Application Support/minecraft/versions" "App" "SAFE" "rm"
+  scan_target "OpenEmu" "$HOME/Library/Application Support/OpenEmu" "App" "PERSONAL" "rm"
+  scan_target "RetroArch" "$HOME/Library/Application Support/RetroArch" "App" "SAFE" "rm"
+fi
+
+# ── C7: Messaging ────────────────────────────────────────────────────────
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  scan_target "WhatsApp Media" "$HOME/Library/Containers/WhatsApp/Data/Library/Application Support/WhatsApp/Media" "App" "PERSONAL" "rm"
+  scan_target "Skype" "$HOME/Library/Application Support/Skype for Desktop" "App" "SAFE" "rm"
+  scan_target "Webex" "$HOME/Library/Application Support/Webex" "App" "SAFE" "rm"
+fi
+
+# ── C8-C11: Media downloads + system extras ──────────────────────────────
+
+if matches_profile "App" || matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
+  scan_target "Prime Video" "$HOME/Library/Containers/Prime Video/Data/Library/com.apple.UserManagedAssets.Dnc1lR" "App" "REBUILD" "rm"
+  scan_target "Apple News" "$HOME/Library/Containers/com.apple.news/Data" "App" "SAFE" "rm"
+  scan_target "TV Downloads" "$HOME/Movies/TV/Media" "App" "REBUILD" "rm"
+  scan_target "Dictionaries" "$HOME/Library/Dictionaries" "System" "SAFE" "rm"
+  scan_target "Speech Voices" "/Library/Speech/Voices" "System" "REBUILD" "rm-sudo"
+fi
+
+# ── C12: Orphaned Group Containers ──────────────────────────────────────
+# Scan ~/Library/Group Containers for entries whose parent app is gone
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  local _gc_dir="$HOME/Library/Group Containers"
+  if [[ -d "$_gc_dir" ]]; then
+    local gc_before=${#T_NAMES[@]} gc_kb=0 gc_count=0
+    while IFS= read -r -d '' gc_entry; do
+      local gc_name
+      gc_name=$(basename "$gc_entry")
+      # Skip Apple's own containers
+      [[ "$gc_name" == *apple* || "$gc_name" == *Apple* ]] && continue
+      # Extract bundle ID: everything after the first dot-separated group prefix
+      local gc_bundle_id="${gc_name#*.}"
+      [[ -z "$gc_bundle_id" ]] && continue
+      # Check if already scanned (dedup against existing T_PATHS)
+      local gc_dup=false
+      for (( di=0; di<${#T_PATHS[@]}; di++ )); do
+        [[ "${T_PATHS[$di]}" == "$gc_entry" ]] && gc_dup=true && break
+      done
+      $gc_dup && continue
+      # Check if app is installed
+      local gc_found=false
+      [[ -d "/Applications/${gc_bundle_id}.app" ]] && gc_found=true
+      [[ -d "$HOME/Applications/${gc_bundle_id}.app" ]] && gc_found=true
+      if ! $gc_found && has_cmd mdfind; then
+        local gc_mdf
+        gc_mdf=$(mdfind "kMDItemCFBundleIdentifier == '${gc_bundle_id}'" 2>/dev/null | head -1)
+        [[ -n "$gc_mdf" ]] && gc_found=true
+      fi
+      $gc_found && continue
+      local gc_kb_item
+      gc_kb_item=$(get_kb "$gc_entry")
+      if (( gc_kb_item > MIN_SIZE_KB )); then
+        T_NAMES+=("Orphan GC: $gc_name")
+        T_PATHS+=("$gc_entry")
+        T_SIZES+=("$gc_kb_item")
+        T_CATS+=("App")
+        T_RISKS+=("SAFE")
+        T_METHODS+=("rm")
+        FOUND_TOTAL=$((FOUND_TOTAL + gc_kb_item))
+        ((gc_count++))
+        gc_kb=$((gc_kb + gc_kb_item))
+      fi
+    done < <(find "$_gc_dir" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+    if (( gc_count > 0 )); then
+      log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}  (%d items)\n" "Orphaned Group Containers" "$(fmt "$gc_kb")" "$gc_count"
+    fi
+  fi
+fi
+
+# ── C13: Minor directories ──────────────────────────────────────────────
+
+if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
+  scan_target "HTTPStorages" "$HOME/Library/HTTPStorages" "System" "SAFE" "rm"
+  scan_target "Autosave Info" "$HOME/Library/Autosave Information" "System" "SAFE" "rm"
+  scan_target "Metadata" "$HOME/Library/Metadata" "System" "SAFE" "rm"
+  scan_target "Suggestions" "$HOME/Library/Suggestions" "System" "SAFE" "rm"
+fi
+
 # ── Scan summary ─────────────────────────────────────────────────────────────
 
 SCAN_END=$(date +%s)
@@ -2253,6 +2646,7 @@ if [[ "$DRY_RUN" == true ]]; then
       find-artifact)  cmd="find \"$path\" -name '${name%% (*}' -maxdepth 5 -type d -exec rm -rf {} +" ;;
       docker-prune)   cmd="docker system prune -a --volumes -f" ;;
       spotlight-rebuild) cmd="sudo mdutil -E /" ;;
+      caskroom-clean) cmd="find \"$path\" -type f \\( -name '*.dmg' -o -name '*.pkg' \\) -delete" ;;
     esac
 
     printf "  ${DIM}[%2d]${NC} %-36s  ${DIM}%s${NC}\n" "$idx" "$name" "$cmd"
@@ -2383,6 +2777,9 @@ for entry in "${SORTED[@]}"; do
       ;;
     spotlight-rebuild)
       sudo mdutil -E / &>/dev/null && ok=true
+      ;;
+    caskroom-clean)
+      find "$path" -type f \( -name '*.dmg' -o -name '*.pkg' \) -delete 2>/dev/null && ok=true
       ;;
   esac
 
