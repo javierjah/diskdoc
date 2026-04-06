@@ -638,7 +638,70 @@ if matches_profile "System"; then
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# PHASE 2: Dev Tools
+# PHASE 2: Apple Intelligence / ML Assets
+# ════════════════════════════════════════════════════════════════════════════
+
+if matches_profile "System"; then
+  cat_header "Apple Intelligence / ML" "$MAGENTA"
+  ai_start=${#T_NAMES[@]}
+
+  # Static known paths
+  scan_target "Siri Caches"         "$HOME/Library/Caches/com.apple.siri.embeddings" "System" "SAFE" "rm"
+
+  # Dynamic scan: /System/Library/AssetsV2/* > 100 MB
+  if [[ -d "/System/Library/AssetsV2" ]]; then
+    while IFS=$'\t' read -r kb path; do
+      [[ -z "$kb" || -z "$path" ]] && continue
+      kb=$(echo "$kb" | tr -d '[:space:]')
+      base=$(basename "$path")
+      (( kb > 102400 )) || continue  # > 100 MB
+      is_excluded "$path" && continue
+
+      T_NAMES+=("ML Asset: $base")
+      T_PATHS+=("$path")
+      T_SIZES+=("$kb")
+      T_CATS+=("System")
+      T_RISKS+=("SAFE")
+      T_METHODS+=("rm-sudo")
+      FOUND_TOTAL=$((FOUND_TOTAL + kb))
+      log "  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "ML Asset: $base" "$(fmt "$kb")"
+    done < <(sudo du -sk /System/Library/AssetsV2/*/ 2>/dev/null | sort -nr)
+  fi
+
+  # Dynamic scan: /private/var/MobileAsset/AssetsV2/* > 100 MB
+  if sudo test -d "/private/var/MobileAsset/AssetsV2" 2>/dev/null; then
+    while IFS=$'\t' read -r kb path; do
+      [[ -z "$kb" || -z "$path" ]] && continue
+      kb=$(echo "$kb" | tr -d '[:space:]')
+      base=$(basename "$path")
+      (( kb > 102400 )) || continue
+      is_excluded "$path" && continue
+
+      T_NAMES+=("Mobile Asset: $base")
+      T_PATHS+=("$path")
+      T_SIZES+=("$kb")
+      T_CATS+=("System")
+      T_RISKS+=("SAFE")
+      T_METHODS+=("rm-sudo")
+      FOUND_TOTAL=$((FOUND_TOTAL + kb))
+      log "  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Mobile Asset: $base" "$(fmt "$kb")"
+    done < <(sudo du -sk /private/var/MobileAsset/AssetsV2/*/ 2>/dev/null | sort -nr)
+  fi
+
+  # Apple system assets
+  if sudo test -d "/Library/Apple/System/Library/Assets" 2>/dev/null; then
+    scan_target "Apple System Assets" "/Library/Apple/System/Library/Assets" "System" "SAFE" "rm-sudo"
+  fi
+
+  ai_count=0; ai_kb=0
+  for ((i=ai_start; i<${#T_NAMES[@]}; i++)); do
+    [[ "${T_CATS[$i]}" == "System" ]] && ((ai_count++)) && ai_kb=$((ai_kb + T_SIZES[$i]))
+  done
+  cat_footer "$ai_count" "$ai_kb"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# PHASE 3: Dev Tools
 # ════════════════════════════════════════════════════════════════════════════
 
 if matches_profile "Dev Tools"; then
