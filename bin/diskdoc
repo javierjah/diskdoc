@@ -1779,6 +1779,52 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
     done < <(find "$HOME/Documents" -maxdepth 1 -name "*.utm" -type d 2>/dev/null)
   fi
 
+  # A4: Lima — each ~/.lima/<instance>/disk is a VM
+  scan_dir_items "$HOME/.lima" "Lima: " "Virtualization" "REBUILD"
+
+  # A4: Colima (v0.6+ uses ~/.colima, pre-v0.6 uses ~/.lima/colima)
+  scan_dir_items "$HOME/.colima" "Colima: " "Virtualization" "REBUILD"
+  scan_target "Colima (legacy)" "$HOME/.lima/colima" "Virtualization" "REBUILD" "rm"
+
+  # A4: OrbStack �� sparse file, use du not ls
+  local _orbstack_data="$HOME/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data"
+  if [[ -d "$_orbstack_data" ]]; then
+    log "\r\033[K  │  ${C_DIM}…${C_RESET}  %-44s" "OrbStack data"
+    local orb_kb
+    orb_kb=$(du -sk "$_orbstack_data" 2>/dev/null | awk '{print $1}')
+    orb_kb=${orb_kb:-0}
+    if (( orb_kb > MIN_SIZE_KB )); then
+      T_NAMES+=("OrbStack data (sparse)")
+      T_PATHS+=("$_orbstack_data")
+      T_SIZES+=("$orb_kb")
+      T_CATS+=("Virtualization")
+      T_RISKS+=("REBUILD")
+      T_METHODS+=("rm")
+      FOUND_TOTAL=$((FOUND_TOTAL + orb_kb))
+      log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "OrbStack data (sparse)" "$(fmt "$orb_kb")"
+    else
+      log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "OrbStack data"
+    fi
+  fi
+
+  # A4: Tart
+  scan_dir_items "$HOME/.tart/vms" "Tart VM: " "Virtualization" "REBUILD"
+  scan_target "Tart OCI Cache" "$HOME/.tart/cache/OCIs" "Virtualization" "SAFE" "rm"
+  scan_target "Tart IPSW Cache" "$HOME/.tart/cache/IPSWs" "Virtualization" "SAFE" "rm"
+
+  # A4: Vagrant
+  scan_dir_items "$HOME/.vagrant.d/boxes" "Vagrant box: " "Virtualization" "REBUILD"
+  scan_target "Vagrant tmp" "$HOME/.vagrant.d/tmp" "Virtualization" "SAFE" "rm"
+
+  # A4: VirtualBox
+  scan_vm_bundle "$HOME/VirtualBox VMs" "" "Virtualization" "REBUILD"
+
+  # A4: Multipass (requires sudo)
+  local _multipass="/var/root/Library/Application Support/multipassd"
+  if sudo test -d "$_multipass" 2>/dev/null; then
+    scan_target "Multipass VMs" "$_multipass" "Virtualization" "REBUILD" "rm-sudo"
+  fi
+
   vm_count=0; vm_kb=0
   for ((i=vm_start; i<${#T_CATS[@]}; i++)); do
     [[ "${T_CATS[$i]}" == "Virtualization" ]] && ((vm_count++)) && vm_kb=$((vm_kb + T_SIZES[$i]))
