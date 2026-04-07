@@ -779,7 +779,7 @@ draw_box() {
   local hline=""
   for ((i=0; i<pad; i++)); do hline+="─"; done
 
-  printf "${color}╭─ %s ${C_RESET}${C_DIM}%s${C_RESET}${color}╮${C_RESET}\n" "$title" "$hline"
+  printf "\r\033[K${color}╭─ %s ${C_RESET}${C_DIM}%s${C_RESET}${color}╮${C_RESET}\n" "$title" "$hline"
 
   for line in "$@"; do
     local line_len=${#line}
@@ -787,12 +787,12 @@ draw_box() {
     (( rpad < 0 )) && rpad=0
     local spaces=""
     for ((i=0; i<rpad; i++)); do spaces+=" "; done
-    printf "${color}│${C_RESET} %s%s${color}│${C_RESET}\n" "$line" "$spaces"
+    printf "\r\033[K${color}│${C_RESET} %s%s${color}│${C_RESET}\n" "$line" "$spaces"
   done
 
   local bline=""
   for ((i=0; i<inner; i++)); do bline+="─"; done
-  printf "${color}╰%s╯${C_RESET}\n" "$bline"
+  printf "\r\033[K${color}╰%s╯${C_RESET}\n" "$bline"
 }
 
 # ── TUI: Status bar + detail panel ───────────────────────────────────────────
@@ -800,9 +800,9 @@ draw_box() {
 # Renders bottom status bar at current cursor position
 render_status_bar() {
   local sel_count=$1 sel_kb=$2 total_count=$3 total_kb=$4
-  printf "  ${C_BOLD}Selected: %d items (%s)${C_RESET}  ${C_DIM}│${C_RESET}  ${C_DIM}Total found: %d items (%s)${C_RESET}\n" \
+  printf "\r\033[K  ${C_BOLD}Selected: %d items (%s)${C_RESET}  ${C_DIM}│${C_RESET}  ${C_DIM}Total found: %d items (%s)${C_RESET}\n" \
     "$sel_count" "$(fmt "$sel_kb")" "$total_count" "$(fmt "$total_kb")"
-  printf "  ${C_DIM}↑↓ Navigate  ␣ Toggle  → Expand  ← Collapse  ⏎ Confirm  s Sort  / Search  q Quit${C_RESET}\n"
+  printf "\r\033[K  ${C_DIM}↑↓ Navigate  ␣ Toggle  → Expand  ← Collapse  ⏎ Confirm  s Sort  / Search  q Quit${C_RESET}\n"
 }
 
 # Renders detail panel for highlighted item
