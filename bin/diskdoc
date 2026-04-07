@@ -27,7 +27,7 @@ set -uo pipefail
 HAS_BASH4=false
 (( BASH_VERSINFO[0] >= 4 )) && HAS_BASH4=true
 
-VERSION="3.0.0"
+VERSION="3.0.1"
 
 # ── Colors (16 ANSI standard — adapts to any terminal theme) ────────────────
 # Semantic names: use these, not raw color names
