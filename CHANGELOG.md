@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.0.3] - 2026-04-07
+
+Simplification, UI cleanup, and performance. No new features.
+
+### Removed
+- **Tree selector** (`_interactive_select_tree`, `build_visible_rows`, `draw_tree`, `_do_sort`, `_rebuild_tree`, `_risk_rank`, `HAS_BASH4`): required bash 4+ associative arrays, incompatible with macOS default bash 3.2. Flat selector is now the only selector.
+- **Sort (s) and Search (/) keybindings**: removed from status bar and code. TUI is already slow; more input handling made it worse.
+- **`render_status_bar()`**: only used by the tree selector.
+- **"Nothing found" output**: categories with zero results are now fully suppressed (no header, no footer, no `·` lines).
+
+### Fixed
+- **Bug #10 — Output verboso**: `--report` produced ~400 lines where 80% were `·` (not found). Implemented deferred header strategy: `cat_header()` buffers, `_flush_cat_header()` prints only when an item is found. Empty categories are completely hidden. Scan progress uses ephemeral `\r` spinner (TTY only). Output lines: 400+ → ~100 (found items only).
+- **Bug #11 — Truncamiento de nombres**: `"${name:0:29}..."` made 5 ML Assets look identical. New `truncate_middle()` (Unicode-safe via `wc -m`/`cut -c`) shows both ends: `ML Asset: com_appl…_Siri_Understanding`. Dynamic `UI_NAME_WIDTH` based on terminal width (clamped 32-60). Replaced 12 hardcoded truncation sites.
+- **Bug #12 — Performance 184s → 69s**: Ghost Apps (97s, 53% of total) invoked `mdfind` + `find Info.plist` per directory. Replaced with single-pass index: one `find` + one `mdfind` builds all installed bundle IDs upfront, then O(1) `grep -qxF` lookups. Added `du` timeout safety net (10s via `gtimeout`/`timeout` when available).
+- **Piped output clean**: spinner/progress lines (`⠹ Scanning...`) now use `logp()` which suppresses on non-TTY. No control characters leak into `diskdoc --report | ...`.
+
 ## [3.0.2] - 2026-04-07
 
 Re-audit fix release. v3.0.1 claimed to fix 17 bugs but only fixed 2.
