@@ -498,6 +498,46 @@ scan_vm_bundle() {
 
 # Scan a directory and report each subdirectory as individual item
 # scan_dir_items dir prefix category risk [method]
+# Aggregate version manager items into a single row
+# scan_version_manager dir label active_cmd cat risk
+# Example: scan_version_manager "$HOME/.nvm/versions/node" "nvm node" "nvm current" "Dev Tools" "REBUILD"
+scan_version_manager() {
+  local dir="$1" label="$2" active_cmd="$3" cat="$4" risk="$5"
+  [[ -d "$dir" ]] || return 0
+  matches_profile "$cat" || return 0
+
+  local total_kb=0 count=0
+  local active_ver=""
+  if [[ -n "$active_cmd" ]]; then
+    active_ver=$(eval "$active_cmd" 2>/dev/null | sed 's/^v//')
+  fi
+
+  for subdir in "$dir"/*/; do
+    [[ -d "$subdir" ]] || continue
+    is_excluded "$subdir" && continue
+    local kb
+    kb=$(get_kb "$subdir")
+    (( kb > 0 )) || continue
+    total_kb=$((total_kb + kb))
+    ((count++))
+  done
+
+  if (( count > 0 && total_kb > MIN_SIZE_KB )); then
+    local agg_name="$label versions ($count found)"
+    T_NAMES+=("$agg_name")
+    T_PATHS+=("$dir")
+    T_SIZES+=("$total_kb")
+    T_CATS+=("$cat")
+    T_RISKS+=("$risk")
+    T_METHODS+=("rm")
+    FOUND_TOTAL=$((FOUND_TOTAL + total_kb))
+    log "  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "$agg_name" "$(fmt "$total_kb")"
+    if [[ -n "$active_ver" ]]; then
+      log "  │     ${C_DIM}🛡️ active: v%s (protected)${C_RESET}\n" "$active_ver"
+    fi
+  fi
+}
+
 scan_dir_items() {
   local dir="$1" prefix="$2" cat="$3" risk="$4" method="${5:-rm}"
   [[ -d "$dir" ]] || return 0
@@ -2771,16 +2811,16 @@ if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
   cat_header "Version Managers" "$CYAN"
   vm2_start=${#T_NAMES[@]}
 
-  scan_dir_items "$HOME/.nvm/versions/node" "nvm node " "Dev Tools" "REBUILD"
-  scan_dir_items "$HOME/Library/Application Support/fnm/node-versions" "fnm node " "Dev Tools" "REBUILD"
-  scan_dir_items "$HOME/.asdf/installs" "asdf: " "Dev Tools" "REBUILD"
-  scan_dir_items "$HOME/.volta/tools" "Volta: " "Dev Tools" "REBUILD"
-  scan_dir_items "$HOME/.local/share/mise/installs" "mise: " "Dev Tools" "REBUILD"
-  scan_dir_items "$HOME/.sdkman/candidates" "sdkman: " "Dev Tools" "REBUILD"
-  scan_dir_items "$HOME/.swiftenv/versions" "swiftenv: " "Dev Tools" "REBUILD"
-  scan_dir_items "$HOME/.phpenv/versions" "phpenv: " "Dev Tools" "REBUILD"
-  scan_dir_items "$HOME/.phpbrew/php" "phpbrew: " "Dev Tools" "REBUILD"
-  scan_dir_items "$HOME/.jabba/jdk" "jabba: " "Dev Tools" "REBUILD"
+  scan_version_manager "$HOME/.nvm/versions/node" "nvm node" "nvm current" "Dev Tools" "REBUILD"
+  scan_version_manager "$HOME/Library/Application Support/fnm/node-versions" "fnm node" "fnm current" "Dev Tools" "REBUILD"
+  scan_version_manager "$HOME/.asdf/installs" "asdf" "asdf current" "Dev Tools" "REBUILD"
+  scan_version_manager "$HOME/.volta/tools" "Volta" "" "Dev Tools" "REBUILD"
+  scan_version_manager "$HOME/.local/share/mise/installs" "mise" "" "Dev Tools" "REBUILD"
+  scan_version_manager "$HOME/.sdkman/candidates" "sdkman" "" "Dev Tools" "REBUILD"
+  scan_version_manager "$HOME/.swiftenv/versions" "swiftenv" "swiftenv version" "Dev Tools" "REBUILD"
+  scan_version_manager "$HOME/.phpenv/versions" "phpenv" "phpenv version" "Dev Tools" "REBUILD"
+  scan_version_manager "$HOME/.phpbrew/php" "phpbrew" "" "Dev Tools" "REBUILD"
+  scan_version_manager "$HOME/.jabba/jdk" "jabba" "jabba current" "Dev Tools" "REBUILD"
 
   vm2_count=0; vm2_kb=0
   for ((i=vm2_start; i<${#T_CATS[@]}; i++)); do
