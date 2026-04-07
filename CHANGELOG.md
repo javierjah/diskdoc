@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.0.2] - 2026-04-07
+
+Re-audit fix release. v3.0.1 claimed to fix 17 bugs but only fixed 2.
+This release addresses the 9 confirmed remaining bugs from the re-audit.
+
+### Fixed
+
+- **Bug #3 — Category footer totals skipping first item**: `((count++))` returns exit code 1 when count=0 (bash post-increment evaluates to 0 = falsy), causing `&&` to short-circuit and skip the first item's size. Changed all 21 instances to `((++count))` (pre-increment). Every category total was wrong.
+- **Bug #1 — 4 orphan sections with no category headers**: Virtualization, Spotlight/Cloud/Telegram, B5-B17 (Cloud/Gaming/System), and C4-C13 (Containers/Creative/Gaming/Messaging/Media) all lacked `cat_header`/`cat_footer`. Added 15 new section headers. Headers (┌) and footers (└───) now match: 39 = 39.
+- **Bug #4 — Mail folder exists but scanner reports nothing found**: macOS Sequoia puts ~/Library/Mail under TCC. `du` returns 0 without Full Disk Access. Added TCC detection: when path exists but du returns 0, shows warning with Full Disk Access instructions. Also applied to Messages.
+- **Bug #2 — Untouchable incomplete**: `scan_untouchable_target` used `[[ -e "$path" ]]` (user-level) to test root-owned paths like sleepimage and Rosetta cache. Changed to `sudo test -e`. Added sudo info message. All E-spec items (E1-E6) were already in code but guard failed without sudo.
+- **Bug #5 — Panel detail bleed-through**: `draw_box` did not clear to end of line. Added `\r\033[K` before every printf in draw_box and render_status_bar.
+- **Bug #6 — Bar widths inconsistent (8 vs 10)**: Selector used hardcoded bar width of 8, table used 10. Added `readonly UI_BAR_WIDTH=10` constant and replaced all 4 hardcoded draw_bar width arguments.
+- **Bug #7 — Large categories not collapsed by default**: Tree selector infrastructure (▼/▶, →/← expand/collapse) already existed but all categories started expanded. Categories with >8 items and Untouchable now start collapsed.
+- **Bug #8 — Sort cycling (s) and search (/) not implemented**: Added `s` key to cycle sort (Size desc → Name asc → Risk → Category) with current mode shown in status bar. Added `/` key for case-insensitive substring filter with Enter/Escape to confirm/cancel.
+- **Bug #9 — 12 nvm versions cluttering table**: Created `scan_version_manager()` that aggregates all versions into single row ("nvm node versions (12 found)") with total size. Detects active version via `nvm current` and marks as protected. Applied to nvm, fnm, asdf, Volta, mise, sdkman, swiftenv, phpenv, phpbrew, jabba.
+
+## [3.0.1] - 2026-04-06
+
+Partial bug fix (only 2 of 17 reported bugs actually fixed).
+
 ## [3.0.0] - 2026-04-06
 
 ### Breaking Changes
