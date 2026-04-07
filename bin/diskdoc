@@ -1329,7 +1329,7 @@ if matches_profile "System"; then
   scan_target "★ iOS/iPadOS Backups" "$HOME/Library/Application Support/MobileSync/Backup" "System" "SAFE" "rm"
   ios_found=0; ios_kb=0
   for ((i=0; i<${#T_NAMES[@]}; i++)); do
-    [[ "${T_NAMES[$i]}" == "★ iOS"* ]] && ((ios_found++)) && ios_kb=$((ios_kb + T_SIZES[$i]))
+    [[ "${T_NAMES[$i]}" == "★ iOS"* ]] && ((++ios_found)) && ios_kb=$((ios_kb + T_SIZES[$i]))
   done
   cat_footer "$ios_found" "$ios_kb"
 fi
@@ -1379,7 +1379,7 @@ if matches_profile "System"; then
   # Category totals
   sys_count=0; sys_kb=0
   for ((i=0; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "System" ]] && ((sys_count++)) && sys_kb=$((sys_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "System" ]] && ((++sys_count)) && sys_kb=$((sys_kb + T_SIZES[$i]))
   done
   cat_footer "$sys_count" "$sys_kb"
 fi
@@ -1442,7 +1442,7 @@ if matches_profile "System"; then
 
   ai_count=0; ai_kb=0
   for ((i=ai_start; i<${#T_NAMES[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "System" ]] && ((ai_count++)) && ai_kb=$((ai_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "System" ]] && ((++ai_count)) && ai_kb=$((ai_kb + T_SIZES[$i]))
   done
   cat_footer "$ai_count" "$ai_kb"
 fi
@@ -1545,7 +1545,7 @@ if matches_profile "Dev Tools"; then
 
   dev_count=0; dev_kb=0
   for ((i=dev_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((dev_count++)) && dev_kb=$((dev_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((++dev_count)) && dev_kb=$((dev_kb + T_SIZES[$i]))
   done
   cat_footer "$dev_count" "$dev_kb"
 fi
@@ -1596,7 +1596,7 @@ if matches_profile "Dev Tools"; then
 
   tc_count=0; tc_kb=0
   for ((i=tc_start; i<${#T_NAMES[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((tc_count++)) && tc_kb=$((tc_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((++tc_count)) && tc_kb=$((tc_kb + T_SIZES[$i]))
   done
   cat_footer "$tc_count" "$tc_kb"
 fi
@@ -1638,7 +1638,7 @@ if [[ "$DEV_ARTIFACTS" == true ]] && matches_profile "Dev Tools"; then
 
   da_count=0; da_kb=0
   for ((i=da_start; i<${#T_NAMES[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((da_count++)) && da_kb=$((da_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((++da_count)) && da_kb=$((da_kb + T_SIZES[$i]))
   done
   cat_footer "$da_count" "$da_kb"
 fi
@@ -1726,7 +1726,7 @@ if matches_profile "App"; then
 
   app_count=0; app_kb=0
   for ((i=app_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "App" ]] && ((app_count++)) && app_kb=$((app_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "App" ]] && ((++app_count)) && app_kb=$((app_kb + T_SIZES[$i]))
   done
   cat_footer "$app_count" "$app_kb"
 fi
@@ -1753,7 +1753,7 @@ if matches_profile "App" || matches_profile "Media" || [[ "$PROFILE" == "all" ]]
 
   media_count=0; media_kb=0
   for ((i=media_start; i<${#T_NAMES[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Media" ]] && ((media_count++)) && media_kb=$((media_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Media" ]] && ((++media_count)) && media_kb=$((media_kb + T_SIZES[$i]))
   done
   cat_footer "$media_count" "$media_kb"
 fi
@@ -1786,7 +1786,7 @@ if matches_profile "Personal" || [[ "$PROFILE" == "all" ]]; then
 
   personal_count=0; personal_kb=0
   for ((i=personal_start; i<${#T_NAMES[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Personal" ]] && ((personal_count++)) && personal_kb=$((personal_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Personal" ]] && ((++personal_count)) && personal_kb=$((personal_kb + T_SIZES[$i]))
   done
   cat_footer "$personal_count" "$personal_kb"
 fi
@@ -1817,7 +1817,7 @@ if matches_profile "Logs" || [[ "$PROFILE" == "all" ]] || [[ "$PROFILE" == "syst
 
   logs_count=0; logs_kb=0
   for ((i=logs_start; i<${#T_NAMES[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Logs" ]] && ((logs_count++)) && logs_kb=$((logs_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Logs" ]] && ((++logs_count)) && logs_kb=$((logs_kb + T_SIZES[$i]))
   done
   cat_footer "$logs_count" "$logs_kb"
 fi
@@ -1863,7 +1863,7 @@ if matches_profile "Cache"; then
 
   cache_count=0; cache_kb=0
   for ((i=cache_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Cache" ]] && ((cache_count++)) && cache_kb=$((cache_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Cache" ]] && ((++cache_count)) && cache_kb=$((cache_kb + T_SIZES[$i]))
   done
   cat_footer "$cache_count" "$cache_kb"
 fi
@@ -1884,7 +1884,7 @@ if matches_profile "Pkg Manager"; then
 
   pkg_count=0; pkg_kb=0
   for ((i=pkg_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Pkg Manager" ]] && ((pkg_count++)) && pkg_kb=$((pkg_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Pkg Manager" ]] && ((++pkg_count)) && pkg_kb=$((pkg_kb + T_SIZES[$i]))
   done
   cat_footer "$pkg_count" "$pkg_kb"
 fi
@@ -1976,7 +1976,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
 
   ghost_count=0; ghost_kb=0
   for ((i=ghost_start; i<${#T_NAMES[@]}; i++)); do
-    [[ "${T_NAMES[$i]}" == "Ghost:"* ]] && ((ghost_count++)) && ghost_kb=$((ghost_kb + T_SIZES[$i]))
+    [[ "${T_NAMES[$i]}" == "Ghost:"* ]] && ((++ghost_count)) && ghost_kb=$((ghost_kb + T_SIZES[$i]))
   done
   cat_footer "$ghost_count" "$ghost_kb"
 fi
@@ -2103,7 +2103,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
 
   vm_count=0; vm_kb=0
   for ((i=vm_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Virtualization" ]] && ((vm_count++)) && vm_kb=$((vm_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Virtualization" ]] && ((++vm_count)) && vm_kb=$((vm_kb + T_SIZES[$i]))
   done
   cat_footer "$vm_count" "$vm_kb"
 fi
@@ -2167,7 +2167,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
 
   cr_count=0; cr_kb=0
   for ((i=cr_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Creative" ]] && ((cr_count++)) && cr_kb=$((cr_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Creative" ]] && ((++cr_count)) && cr_kb=$((cr_kb + T_SIZES[$i]))
   done
   cat_footer "$cr_count" "$cr_kb"
 fi
@@ -2200,7 +2200,7 @@ if matches_profile "Personal" || matches_profile "System" || [[ "$PROFILE" == "a
 
   mail_count=0; mail_kb=0
   for ((i=mail_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Mail" ]] && ((mail_count++)) && mail_kb=$((mail_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Mail" ]] && ((++mail_count)) && mail_kb=$((mail_kb + T_SIZES[$i]))
   done
   cat_footer "$mail_count" "$mail_kb"
 fi
@@ -2234,7 +2234,7 @@ if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
 
     vf_count=0; vf_kb=0
     for ((i=vf_start; i<${#T_CATS[@]}; i++)); do
-      [[ "${T_CATS[$i]}" == "System Temp" ]] && ((vf_count++)) && vf_kb=$((vf_kb + T_SIZES[$i]))
+      [[ "${T_CATS[$i]}" == "System Temp" ]] && ((++vf_count)) && vf_kb=$((vf_kb + T_SIZES[$i]))
     done
     cat_footer "$vf_count" "$vf_kb"
   fi
@@ -2363,7 +2363,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
 
   br_count=0; br_kb=0
   for ((i=br_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Browser" ]] && ((br_count++)) && br_kb=$((br_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Browser" ]] && ((++br_count)) && br_kb=$((br_kb + T_SIZES[$i]))
   done
   cat_footer "$br_count" "$br_kb"
 fi
@@ -2397,7 +2397,7 @@ if [[ "$REPORT_MODE" == true ]] || matches_profile "Personal"; then
 
   bp_count=0; bp_kb=0
   for ((i=bp_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Browser Personal" ]] && ((bp_count++)) && bp_kb=$((bp_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Browser Personal" ]] && ((++bp_count)) && bp_kb=$((bp_kb + T_SIZES[$i]))
   done
   cat_footer "$bp_count" "$bp_kb"
 fi
@@ -2533,7 +2533,7 @@ if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
 
   le_count=0; le_kb=0
   for ((i=le_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((le_count++)) && le_kb=$((le_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((++le_count)) && le_kb=$((le_kb + T_SIZES[$i]))
   done
   cat_footer "$le_count" "$le_kb"
 fi
@@ -2586,7 +2586,7 @@ if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
 
   bt_count=0; bt_kb=0
   for ((i=bt_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((bt_count++)) && bt_kb=$((bt_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((++bt_count)) && bt_kb=$((bt_kb + T_SIZES[$i]))
   done
   cat_footer "$bt_count" "$bt_kb"
 fi
