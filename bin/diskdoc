@@ -1988,6 +1988,7 @@ fi
 # ── A1-A3: Virtualization — Parallels, VMware, UTM ─────────────────────────
 
 if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Virtualization" "$YELLOW"
   vm_start=${#T_NAMES[@]}
 
   # A1: Parallels Desktop
@@ -2111,6 +2112,8 @@ fi
 # ── A5: Docker.raw — the single giant file ─────────────────────────────────
 
 if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Docker" "$YELLOW"
+  local docker_count=0 docker_kb=0
   local _docker_raw="$HOME/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"
   if [[ -f "$_docker_raw" ]]; then
     log "\r\033[K  │  ${C_DIM}…${C_RESET}  %-44s" "Docker.raw"
@@ -2126,11 +2129,13 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
       T_RISKS+=("SAFE")
       T_METHODS+=("docker-prune")
       FOUND_TOTAL=$((FOUND_TOTAL + docker_raw_kb))
+      docker_count=1; docker_kb=$docker_raw_kb
       log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "Docker.raw (all images/volumes)" "$(fmt "$docker_raw_kb")"
     else
       log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "Docker.raw"
     fi
   fi
+  cat_footer "$docker_count" "$docker_kb"
 fi
 
 # ── A6-A8: Creative tools caches ───────────────────────────────────────────
@@ -2243,6 +2248,8 @@ fi
 # ── A11: Spotlight index ──────────────────────────────────────────────────
 
 if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Spotlight" "$YELLOW"
+  local spot_count=0 spot_total_kb=0
   local _spotlight_path
   if (( MACOS_MAJOR >= 11 )); then
     _spotlight_path="/System/Volumes/Data/.Spotlight-V100"
@@ -2262,16 +2269,21 @@ if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
       T_RISKS+=("SAFE")
       T_METHODS+=("spotlight-rebuild")
       FOUND_TOTAL=$((FOUND_TOTAL + spot_kb))
+      spot_count=1; spot_total_kb=$spot_kb
       log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "Spotlight Index" "$(fmt "$spot_kb")"
     else
       log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "Spotlight Index"
     fi
   fi
+  cat_footer "$spot_count" "$spot_total_kb"
 fi
 
-# ── A12: Google Drive DriveFS ─────────────────────────────────────────────
+# ── A12-A13: Cloud & Media sync ──────────────────────────────────────────
 
 if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Cloud & Media" "$CYAN"
+  local cm_start=${#T_NAMES[@]}
+
   local _gd_base="$HOME/Library/Application Support/Google/DriveFS"
   if [[ -d "$_gd_base" ]]; then
     for gd_id_dir in "$_gd_base"/*/; do
@@ -2281,12 +2293,14 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
       scan_target "GDrive Cache ($gd_id)" "${gd_id_dir}content_cache" "App" "SAFE" "rm"
     done
   fi
-fi
 
-# ── A13: Telegram ─────────────────────────────────────────────────────────
-
-if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   scan_target "Telegram Media" "$HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram" "App" "PERSONAL" "rm"
+
+  local cm_count=0 cm_kb=0
+  for ((i=cm_start; i<${#T_NAMES[@]}; i++)); do
+    ((++cm_count)) && cm_kb=$((cm_kb + T_SIZES[$i]))
+  done
+  cat_footer "$cm_count" "$cm_kb"
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2402,9 +2416,11 @@ if [[ "$REPORT_MODE" == true ]] || matches_profile "Personal"; then
   cat_footer "$bp_count" "$bp_kb"
 fi
 
-# ── B5-B17: Various Tier 2 categories ────────────────────────────────────
+# ── B5: Conda environments ──────────────────────────────────────────────
 
 if matches_profile "Dev Tools" || matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Conda Environments" "$CYAN"
+  local conda_start=${#T_NAMES[@]}
   # B5: Conda/Anaconda/Miniconda
   for conda_dir in "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/opt/miniconda3" "$HOME/opt/anaconda3"; do
     [[ -d "$conda_dir" ]] || continue
@@ -2413,9 +2429,19 @@ if matches_profile "Dev Tools" || matches_profile "App" || [[ "$PROFILE" == "all
     scan_target "$cname pkgs (cache)" "${conda_dir}/pkgs" "Dev Tools" "SAFE" "conda-clean"
     scan_dir_items "${conda_dir}/envs" "$cname env: " "Dev Tools" "REBUILD"
   done
+  local conda_count=0 conda_kb=0
+  for ((i=conda_start; i<${#T_NAMES[@]}; i++)); do
+    ((++conda_count)) && conda_kb=$((conda_kb + T_SIZES[$i]))
+  done
+  cat_footer "$conda_count" "$conda_kb"
 fi
 
+# ── B6-B11: Cloud & Communication ──────────────────────────────────────
+
 if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Cloud & Communication" "$CYAN"
+  local cc_start=${#T_NAMES[@]}
+
   # B6: Cloud storage caches
   scan_target "Dropbox Cache" "$HOME/Dropbox/.dropbox.cache" "App" "SAFE" "rm"
   scan_target "Dropbox File Clones" "$HOME/Library/Group Containers/G7HH3F8CAK.com.getdropbox.dropbox.sync/file_clones" "App" "SAFE" "rm"
@@ -2436,14 +2462,38 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   scan_target "Spotify Stream Cache" "$HOME/Library/Caches/com.spotify.client/Data" "App" "SAFE" "rm"
   scan_target "Spotify Offline" "$HOME/Library/Application Support/Spotify/PersistentCache/Storage" "App" "REBUILD" "rm"
 
+  local cc_count=0 cc_kb=0
+  for ((i=cc_start; i<${#T_NAMES[@]}; i++)); do
+    ((++cc_count)) && cc_kb=$((cc_kb + T_SIZES[$i]))
+  done
+  cat_footer "$cc_count" "$cc_kb"
+fi
+
+# ── B11: Gaming ─────────────────────────────────────────────────────────
+
+if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Gaming" "$BLUE"
+  local gaming_start=${#T_NAMES[@]}
+
   # B11: Steam
   scan_target "Steam Downloads" "$HOME/Library/Application Support/Steam/steamapps/downloading" "App" "SAFE" "rm"
   scan_target "Steam Shader Cache" "$HOME/Library/Application Support/Steam/steamapps/shadercache" "App" "SAFE" "rm"
   scan_target "Steam Games" "$HOME/Library/Application Support/Steam/steamapps/common" "App" "REBUILD" "rm"
   scan_target "Steam Workshop" "$HOME/Library/Application Support/Steam/steamapps/workshop" "App" "REBUILD" "rm"
+
+  local gaming_count=0 gaming_kb=0
+  for ((i=gaming_start; i<${#T_NAMES[@]}; i++)); do
+    ((++gaming_count)) && gaming_kb=$((gaming_kb + T_SIZES[$i]))
+  done
+  cat_footer "$gaming_count" "$gaming_kb"
 fi
 
+# ── B12-B14: Game Engines & Build ───────────────────────────────────────
+
 if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Game Engines & Build" "$CYAN"
+  local ge_start=${#T_NAMES[@]}
+
   # B12: Unity
   scan_target "Unity Asset Store" "$HOME/Library/Unity/Asset Store-5.x" "Dev Tools" "SAFE" "rm"
   scan_target "Unity Cache" "$HOME/Library/Unity/cache" "Dev Tools" "SAFE" "rm"
@@ -2457,9 +2507,20 @@ if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
   # B14: Bazel
   scan_target "Bazel cache (new)" "$HOME/.cache/bazel" "Dev Tools" "SAFE" "bazel-clean"
   scan_target "Bazel cache (legacy)" "/private/var/tmp/_bazel_${USER}" "Dev Tools" "SAFE" "rm-sudo"
+
+  local ge_count=0 ge_kb=0
+  for ((i=ge_start; i<${#T_NAMES[@]}; i++)); do
+    ((++ge_count)) && ge_kb=$((ge_kb + T_SIZES[$i]))
+  done
+  cat_footer "$ge_count" "$ge_kb"
 fi
 
+# ── B15-B17: System Extras ──────────────────────────────────────────────
+
 if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "System Extras" "$YELLOW"
+  local se_start=${#T_NAMES[@]}
+
   # B15: Previously Relocated Items
   scan_target "Previously Relocated" "/Users/Shared/Previously Relocated Items" "System" "SAFE" "rm"
 
@@ -2469,9 +2530,19 @@ if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
   if (( MACOS_MAJOR >= 15 )); then
     scan_target "Daemon Containers" "$HOME/Library/Daemon Containers" "System" "SAFE" "rm"
   fi
+
+  local se_count=0 se_kb=0
+  for ((i=se_start; i<${#T_NAMES[@]}; i++)); do
+    ((++se_count)) && se_kb=$((se_kb + T_SIZES[$i]))
+  done
+  cat_footer "$se_count" "$se_kb"
 fi
 
+# ── B16: Homebrew Extras ────────────────────────────────────────────────
+
 if has_cmd brew && (matches_profile "Pkg Manager" || [[ "$PROFILE" == "all" ]]); then
+  cat_header "Homebrew Extras" "$CYAN"
+  local cask_count=0 cask_total_kb=0
   # B16: Homebrew Caskroom .dmg/.pkg files
   local _caskroom
   _caskroom="$(brew --prefix 2>/dev/null)/Caskroom"
@@ -2487,11 +2558,13 @@ if has_cmd brew && (matches_profile "Pkg Manager" || [[ "$PROFILE" == "all" ]]);
       T_RISKS+=("SAFE")
       T_METHODS+=("caskroom-clean")
       FOUND_TOTAL=$((FOUND_TOTAL + cask_kb))
+      cask_count=1; cask_total_kb=$cask_kb
       log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "Homebrew Caskroom installers" "$(fmt "$cask_kb")"
     else
       log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "Caskroom installers"
     fi
   fi
+  cat_footer "$cask_count" "$cask_total_kb"
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2557,7 +2630,7 @@ if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
 
   vm2_count=0; vm2_kb=0
   for ((i=vm2_start; i<${#T_CATS[@]}; i++)); do
-    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((vm2_count++)) && vm2_kb=$((vm2_kb + T_SIZES[$i]))
+    [[ "${T_CATS[$i]}" == "Dev Tools" ]] && ((++vm2_count)) && vm2_kb=$((vm2_kb + T_SIZES[$i]))
   done
   cat_footer "$vm2_count" "$vm2_kb"
 fi
@@ -2594,6 +2667,9 @@ fi
 # ── C4: Container tools ──────────────────────────────────────────────────
 
 if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Container Tools" "$CYAN"
+  local ct_start=${#T_NAMES[@]}
+
   scan_target "Podman (Apple HV)" "$HOME/.local/share/containers/podman/machine/applehv" "Dev Tools" "REBUILD" "rm"
   scan_target "Podman (QEMU)" "$HOME/.local/share/containers/podman/machine/qemu" "Dev Tools" "REBUILD" "rm"
   scan_target "Rancher Desktop" "$HOME/Library/Application Support/rancher-desktop" "Dev Tools" "REBUILD" "rm"
@@ -2601,11 +2677,20 @@ if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
   scan_target "Minikube cache" "$HOME/.minikube/cache" "Dev Tools" "SAFE" "rm"
   scan_target "Helm cache" "$HOME/Library/Caches/helm/repository" "Dev Tools" "SAFE" "rm"
   scan_target "Helm legacy" "$HOME/.helm" "Dev Tools" "SAFE" "rm"
+
+  local ct_count=0 ct_kb=0
+  for ((i=ct_start; i<${#T_NAMES[@]}; i++)); do
+    ((++ct_count)) && ct_kb=$((ct_kb + T_SIZES[$i]))
+  done
+  cat_footer "$ct_count" "$ct_kb"
 fi
 
-# ── C5: Creative tools ───────────────────────────────────────────────────
+# ── C5: Creative Apps ───────────────────────────────────────────────────
 
 if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Creative Apps" "$MAGENTA"
+  local ca_start=${#T_NAMES[@]}
+
   scan_target "Figma" "$HOME/Library/Application Support/Figma" "App" "SAFE" "rm"
   scan_target "Figma Cache" "$HOME/Library/Caches/com.figma.Desktop" "App" "SAFE" "rm"
   scan_target "Sketch" "$HOME/Library/Application Support/com.bohemiancoding.sketch3" "App" "SAFE" "rm"
@@ -2613,11 +2698,20 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
     [[ -d "$blender_ver" ]] || continue
     scan_target "Blender $(basename "$blender_ver")" "$blender_ver" "App" "SAFE" "rm"
   done
+
+  local ca_count=0 ca_kb=0
+  for ((i=ca_start; i<${#T_NAMES[@]}; i++)); do
+    ((++ca_count)) && ca_kb=$((ca_kb + T_SIZES[$i]))
+  done
+  cat_footer "$ca_count" "$ca_kb"
 fi
 
-# ── C6: Gaming ───────────────────────────────────────────────────────────
+# ── C6: More Gaming ────────────────────────────────────────────────────
 
 if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "More Gaming" "$BLUE"
+  local mg_start=${#T_NAMES[@]}
+
   scan_target "Epic Games" "/Users/Shared/Epic Games" "App" "REBUILD" "rm"
   scan_target "Epic Games Support" "$HOME/Library/Application Support/Epic" "App" "SAFE" "rm"
   scan_target "Battle.net" "$HOME/Library/Application Support/Blizzard" "App" "SAFE" "rm"
@@ -2627,36 +2721,61 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   scan_target "OpenEmu" "$HOME/Library/Application Support/OpenEmu" "App" "PERSONAL" "rm"
   scan_target "RetroArch" "$HOME/Library/Application Support/RetroArch" "App" "SAFE" "rm"
   scan_target "GOG Galaxy" "$HOME/Library/Application Support/GOG.com" "App" "SAFE" "rm"
+
+  local mg_count=0 mg_kb=0
+  for ((i=mg_start; i<${#T_NAMES[@]}; i++)); do
+    ((++mg_count)) && mg_kb=$((mg_kb + T_SIZES[$i]))
+  done
+  cat_footer "$mg_count" "$mg_kb"
 fi
 
-# ── C7: Messaging ────────────────────────────────────────────────────────
+# ── C7: Messaging Apps ─────────────────────────────────────────────────
 
 if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Messaging Apps" "$CYAN"
+  local msg_start=${#T_NAMES[@]}
+
   scan_target "WhatsApp Media" "$HOME/Library/Containers/WhatsApp/Data/Library/Application Support/WhatsApp/Media" "App" "PERSONAL" "rm"
   scan_target "Line" "$HOME/Library/Containers/jp.naver.line.mac/Data" "App" "SAFE" "rm"
   scan_target "Viber" "$HOME/Library/Group Containers/group.viber.share.container/ViberDocuments" "App" "PERSONAL" "rm"
   scan_target "Skype" "$HOME/Library/Application Support/Skype for Desktop" "App" "SAFE" "rm"
   scan_target "Webex" "$HOME/Library/Application Support/Webex" "App" "SAFE" "rm"
+
+  local msg_count=0 msg_kb=0
+  for ((i=msg_start; i<${#T_NAMES[@]}; i++)); do
+    ((++msg_count)) && msg_kb=$((msg_kb + T_SIZES[$i]))
+  done
+  cat_footer "$msg_count" "$msg_kb"
 fi
 
-# ── C8-C11: Media downloads + system extras ──────────────────────────────
+# ── C8-C11: Media & System Extras ──────────────────────────────────────
 
 if matches_profile "App" || matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Media & System Extras" "$BLUE"
+  local mse_start=${#T_NAMES[@]}
+
   scan_target "Prime Video" "$HOME/Library/Containers/Prime Video/Data/Library/com.apple.UserManagedAssets.Dnc1lR" "App" "REBUILD" "rm"
   scan_target "Apple News" "$HOME/Library/Containers/com.apple.news/Data" "App" "SAFE" "rm"
   scan_target "TV Downloads" "$HOME/Movies/TV/Media" "App" "REBUILD" "rm"
   scan_target "Apple TV Group" "$HOME/Library/Group Containers/group.com.apple.tv/Library" "App" "REBUILD" "rm"
   scan_target "Dictionaries" "$HOME/Library/Dictionaries" "System" "SAFE" "rm"
   scan_target "Speech Voices" "/Library/Speech/Voices" "System" "REBUILD" "rm-sudo"
+
+  local mse_count=0 mse_kb=0
+  for ((i=mse_start; i<${#T_NAMES[@]}; i++)); do
+    ((++mse_count)) && mse_kb=$((mse_kb + T_SIZES[$i]))
+  done
+  cat_footer "$mse_count" "$mse_kb"
 fi
 
 # ── C12: Orphaned Group Containers ──────────────────────────────────────
 # Scan ~/Library/Group Containers for entries whose parent app is gone
 
 if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Orphaned Containers" "$YELLOW"
   local _gc_dir="$HOME/Library/Group Containers"
+  local gc_kb=0 gc_count=0
   if [[ -d "$_gc_dir" ]]; then
-    local gc_kb=0 gc_count=0
     while IFS= read -r -d '' gc_entry; do
       local gc_name
       gc_name=$(basename "$gc_entry")
@@ -2699,11 +2818,15 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
       log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}  (%d items)\n" "Orphaned Group Containers" "$(fmt "$gc_kb")" "$gc_count"
     fi
   fi
+  cat_footer "$gc_count" "$gc_kb"
 fi
 
-# ── C13: Minor directories ──────────────────────────────────────────────
+# ── C13: Minor System Directories ──────────────────────────────────────
 
 if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
+  cat_header "Minor System Directories" "$YELLOW"
+  local msd_start=${#T_NAMES[@]}
+
   scan_target "HTTPStorages" "$HOME/Library/HTTPStorages" "System" "SAFE" "rm"
   scan_target "Autosave Info" "$HOME/Library/Autosave Information" "System" "SAFE" "rm"
   scan_target "Metadata" "$HOME/Library/Metadata" "System" "SAFE" "rm"
@@ -2711,6 +2834,12 @@ if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
   scan_target "PreferencePanes" "$HOME/Library/PreferencePanes" "System" "SAFE" "rm"
   scan_target "Screen Savers" "$HOME/Library/Screen Savers" "System" "SAFE" "rm"
   scan_target "QuickLook Plugins" "$HOME/Library/QuickLook" "System" "SAFE" "rm"
+
+  local msd_count=0 msd_kb=0
+  for ((i=msd_start; i<${#T_NAMES[@]}; i++)); do
+    ((++msd_count)) && msd_kb=$((msd_kb + T_SIZES[$i]))
+  done
+  cat_footer "$msd_count" "$msd_kb"
 fi
 
 # ── Untouchable scanners (E1-E6) — NEVER deletable, report only ─────────────
@@ -2775,6 +2904,7 @@ if (( _u_count > 0 )); then
   log "  │\n"
   log "  │  ${C_DIM}Total untouchable: %s — shown for transparency, never deletable${C_RESET}\n" "$(fmt "$U_TOTAL")"
 fi
+cat_footer "$_u_count" "$U_TOTAL"
 
 }
 run_all_scans
