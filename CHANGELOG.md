@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.0.4] - 2026-04-08
+
+Bug fixes only. No new features. Fixes 2 critical bugs introduced in v3.0.3 and 5 inherited issues.
+
+### Fixed
+
+- **Bug #20 — `local: can only be used in a function`**: The v3.0.3 cleanup stderr capture used `local` in top-level code. Wrapped cleanup loop in `do_cleanup()` function so `local` is valid. Cleanup output is now clean.
+- **Bug #21 — ML Assets and Simulator Volumes falsely marked SAFE**: `/System/Library/AssetsV2/*` and `/Library/Developer/CoreSimulator/Volumes/` are SIP-protected on macOS Tahoe. `rm -rf` always fails. Moved both to Untouchable with educational messages. Added generic `is_sip_protected()` helper for future-proofing.
+- **Bug #19 — Homebrew Cache duplicated**: Dynamic `~/Library/Caches/*` scanner ran before Package Managers, so Homebrew appeared twice (inflating totals by ~2.5 GB). Added name-based exclusion for caches covered by dedicated scanners.
+- **Bug #18 — Spotlight Index marked SAFE**: Changed risk tag from SAFE to REBUILD. Deleting the index forces multi-hour re-indexing with 100% CPU.
+- **Bug #15 — iOS Backups header never closed**: When no backups found, `cat_footer` printed nothing, leaving `┌` unclosed. Now prints `└─── nothing found`.
+- **Bug #16 — Untouchable box items outside border**: `draw_box` closed with `╰` before items were printed. Restructured to pass all lines (header, items, educational footer) to `draw_box` so everything renders inside the box.
+- **Bug #2 — Untouchable incomplete and miscounted**: Rosetta 2 cache now detected via `[[ -d ]]` with size "—" (SIP blocks `sudo du`). Removed StagedFrameworks scanner (path doesn't exist on Tahoe). Footer counter now counts only visible items, matching the displayed list exactly.
+
+### Changed
+
+- Apple System Assets (`/Library/Apple/System/Library/Assets`) routed through `is_sip_protected()` — added to Untouchable if SIP-protected, kept as SAFE otherwise.
+
 ## [3.0.3] - 2026-04-07
 
 Simplification, UI cleanup, and performance. No new features.

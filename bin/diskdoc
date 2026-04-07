@@ -23,11 +23,7 @@
 # shellcheck disable=SC2059,SC2004
 set -uo pipefail
 
-# ── Bash version detection ──────────────────────────────────────────────────
-HAS_BASH4=false
-(( BASH_VERSINFO[0] >= 4 )) && HAS_BASH4=true
-
-VERSION="3.0.2"
+VERSION="3.0.4"
 
 # ── Colors (16 ANSI standard — adapts to any terminal theme) ────────────────
 # Semantic names: use these, not raw color names
@@ -62,10 +58,36 @@ disable_colors() {
 # Respect NO_COLOR (https://no-color.org)
 [[ -n "${NO_COLOR:-}" ]] && disable_colors
 # Disable colors if not a terminal (piped output)
-[[ ! -t 1 ]] && disable_colors
+IS_TTY=true
+[[ ! -t 1 ]] && { disable_colors; IS_TTY=false; }
+
+# Progress log — ephemeral spinner line, only shown on TTY
+logp() { [[ "$IS_TTY" == true && "$JSON_MODE" != true ]] && printf "$@"; }
 
 # ── UI dimensions — single source of truth ──────────────────────────────────
 readonly UI_BAR_WIDTH=10
+
+# Dynamic name width based on terminal
+_term_width=${COLUMNS:-$(tput cols 2>/dev/null || echo 100)}
+_fixed=47  # space for index + size + bar + risk + padding
+UI_NAME_WIDTH=$((_term_width - _fixed))
+(( UI_NAME_WIDTH < 32 )) && UI_NAME_WIDTH=32
+(( UI_NAME_WIDTH > 60 )) && UI_NAME_WIDTH=60
+
+truncate_middle() {
+  local str="$1" max="$2"
+  local len
+  len=$(printf '%s' "$str" | wc -m | tr -d ' ')
+  if (( len <= max )); then
+    printf '%s' "$str"
+    return
+  fi
+  local half=$(( (max - 1) / 2 ))
+  local first last
+  first=$(printf '%s' "$str" | cut -c1-$half)
+  last=$(printf '%s' "$str" | cut -c$((len - half + 1))-)
+  printf '%s…%s' "$first" "$last"
+}
 
 # ── Flags ────────────────────────────────────────────────────────────────────
 AUTO_MODE=false
@@ -345,11 +367,24 @@ U_TOTAL=0
 
 log() { [[ "$JSON_MODE" == true ]] && return; printf "$@"; }
 
+# Detect timeout command (coreutils gtimeout or GNU timeout)
+_TIMEOUT_CMD=""
+if command -v gtimeout &>/dev/null; then
+  _TIMEOUT_CMD="gtimeout"
+elif command -v timeout &>/dev/null; then
+  _TIMEOUT_CMD="timeout"
+fi
+
 get_kb() {
   local p="$1"
   if [[ -d "$p" ]]; then
     local val
-    val=$(du -sk "$p" 2>/dev/null | awk '{print $1}')
+    if [[ -n "$_TIMEOUT_CMD" ]]; then
+      val=$($_TIMEOUT_CMD 10 du -sk "$p" 2>/dev/null | awk '{print $1}')
+    else
+      val=$(du -sk "$p" 2>/dev/null | awk '{print $1}')
+    fi
+    [[ "$val" =~ ^[0-9]+$ ]] || val=0
     echo "${val:-0}"
   else
     echo 0
@@ -361,6 +396,7 @@ get_kb_sudo() {
   if sudo test -d "$p" 2>/dev/null; then
     local val
     val=$(sudo du -sk "$p" 2>/dev/null | awk '{print $1}')
+    [[ "$val" =~ ^[0-9]+$ ]] || val=0
     echo "${val:-0}"
   else
     echo 0
@@ -398,6 +434,18 @@ risk_color() {
   esac
 }
 
+# Check if a path is protected by SIP (System Integrity Protection).
+# Returns 0 (true) if path is under a known SIP-protected prefix.
+is_sip_protected() {
+  local path="$1"
+  case "$path" in
+    /System/*|/usr/*|/bin/*|/sbin/*|/private/var/db/*|/Library/Apple/*|/Library/Developer/CoreSimulator/Volumes/*)
+      return 0 ;;
+    *)
+      return 1 ;;
+  esac
+}
+
 # Add an untouchable item — populates U_* arrays, NEVER T_* arrays.
 # These items cannot be deleted by any code path.
 scan_untouchable_target() {
@@ -420,7 +468,26 @@ scan_untouchable_target() {
 
 # ── Scan helpers ─────────────────────────────────────────────────────────────
 
+_cat_buf_name=""
+_cat_buf_color=""
+
 cat_header() {
+  _cat_buf_name="$1"
+  _cat_buf_color="$2"
+}
+
+_flush_cat_header() {
+  [[ -z "$_cat_buf_name" ]] && return
+  local name="$_cat_buf_name" color="$_cat_buf_color"
+  local pad=$((55 - ${#name}))
+  local line=""
+  for ((i=0; i<pad; i++)); do line+="─"; done
+  log "\n  ${color}${BOLD}┌ %s ${NC}${DIM}%s${NC}\n" "$name" "$line"
+  _cat_buf_name=""
+  _cat_buf_color=""
+}
+
+cat_header_direct() {
   local name="$1" color="$2"
   local pad=$((55 - ${#name}))
   local line=""
@@ -432,8 +499,6 @@ cat_footer() {
   local found=$1 size=$2
   if (( found > 0 )); then
     log "  ${DIM}└───${NC} ${BOLD}%d found${NC} ${DIM}·${NC} ${BOLD}%s${NC}\n" "$found" "$(fmt "$size")"
-  else
-    log "  ${DIM}└─── nothing found${NC}\n"
   fi
 }
 
@@ -441,9 +506,9 @@ scan_target() {
   local name="$1" path="$2" cat="$3" risk="$4" method="${5:-rm}"
 
   matches_profile "$cat" || return 0
-  is_excluded "$path" && { log "  │  ${DIM}⊘${NC}  ${DIM}%-44s excluded${NC}\n" "$name"; return 0; }
+  is_excluded "$path" && return 0
 
-  log "\r\033[K  │  ${DIM}…${NC}  %-44s" "$name"
+  logp "\r\033[K  ${DIM}⠹ Scanning %s${NC}" "$name"
 
   local kb=0
   case "$method" in
@@ -452,6 +517,7 @@ scan_target() {
   esac
 
   if (( kb > MIN_SIZE_KB )); then
+    _flush_cat_header
     T_NAMES+=("$name")
     T_PATHS+=("$path")
     T_SIZES+=("$kb")
@@ -462,7 +528,7 @@ scan_target() {
     log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "$name" "$(fmt "$kb")"
     return 0
   else
-    log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "$name"
+    logp "\r\033[K"
     return 1
   fi
 }
@@ -484,6 +550,7 @@ scan_vm_bundle() {
     local kb
     kb=$(get_kb "$bundle")
     if (( kb > MIN_SIZE_KB )); then
+      _flush_cat_header
       T_NAMES+=("$bname")
       T_PATHS+=("$bundle")
       T_SIZES+=("$kb")
@@ -523,6 +590,7 @@ scan_version_manager() {
   done
 
   if (( count > 0 && total_kb > MIN_SIZE_KB )); then
+    _flush_cat_header
     local agg_name="$label versions ($count found)"
     T_NAMES+=("$agg_name")
     T_PATHS+=("$dir")
@@ -552,6 +620,7 @@ scan_dir_items() {
     local kb
     kb=$(get_kb "$subdir")
     if (( kb > MIN_SIZE_KB )); then
+      _flush_cat_header
       T_NAMES+=("$prefix$sname")
       T_PATHS+=("$subdir")
       T_SIZES+=("$kb")
@@ -646,7 +715,7 @@ run_doctor() {
   while IFS=$'\t' read -r kb path; do
     local name="${path#"$HOME"/Library/}"
     name="${name%/}"
-    (( ${#name} > 44 )) && name="${name:0:41}..."
+    name=$(truncate_middle "$name" 44)
     local color=""
     if (( kb >= 10485760 )); then color="$RED"
     elif (( kb >= 1048576 )); then color="$YELLOW"
@@ -663,7 +732,7 @@ run_doctor() {
   while IFS=$'\t' read -r kb path; do
     local name="${path#"$HOME"/}"
     name="${name%/}"
-    (( ${#name} > 44 )) && name="${name:0:41}..."
+    name=$(truncate_middle "$name" 44)
     local color=""
     if (( kb >= 10485760 )); then color="$RED"
     elif (( kb >= 1048576 )); then color="$YELLOW"
@@ -840,14 +909,6 @@ draw_box() {
 
 # ── TUI: Status bar + detail panel ───────────────────────────────────────────
 
-# Renders bottom status bar at current cursor position
-render_status_bar() {
-  local sel_count=$1 sel_kb=$2 total_count=$3 total_kb=$4
-  printf "\r\033[K  ${C_BOLD}Selected: %d items (%s)${C_RESET}  ${C_DIM}│${C_RESET}  ${C_DIM}Total found: %d items (%s)${C_RESET}\n" \
-    "$sel_count" "$(fmt "$sel_kb")" "$total_count" "$(fmt "$total_kb")"
-  printf "\r\033[K  ${C_DIM}↑↓ Navigate  ␣ Toggle  → Expand  ← Collapse  ⏎ Confirm  s Sort  / Search  q Quit${C_RESET}\n"
-}
-
 # Renders detail panel for highlighted item
 render_detail_panel() {
   local idx=$1
@@ -891,11 +952,7 @@ interactive_select() {
   # Select all by default
   for ((i=0; i<num; i++)); do SELECTED[$i]=1; done
 
-  if [[ "$HAS_BASH4" == true ]]; then
-    _interactive_select_tree "$num"
-  else
-    _interactive_select_flat "$num"
-  fi
+  _interactive_select_flat "$num"
 }
 
 # ── Flat selector (bash 3.2 compatible — no collapse/expand) ────────────────
@@ -950,8 +1007,8 @@ _interactive_select_flat() {
 
     for ((si=scroll; si<end; si++)); do
       local ri="${SORTED[$si]#*|}"
-      local name="${T_NAMES[$ri]}"
-      (( ${#name} > 32 )) && name="${name:0:29}..."
+      local name
+      name=$(truncate_middle "${T_NAMES[$ri]}" "$UI_NAME_WIDTH")
       local sf
       if [[ "${T_METHODS[$ri]}" == "tm-thin" ]]; then
         sf="${TM_SNAP_COUNT} snaps"
@@ -970,10 +1027,10 @@ _interactive_select_flat() {
       [[ "${SELECTED[$si]}" == "1" ]] && check="[x]"
 
       if (( si == cursor )); then
-        printf "  ${C_BOLD}${C_INFO}> ${check}${C_RESET} %-32s %10s %s %s ${rc}${C_BOLD}%-8s${C_RESET}\033[K\n" \
+        printf "  ${C_BOLD}${C_INFO}> ${check}${C_RESET} %-${UI_NAME_WIDTH}s %10s %s %s ${rc}${C_BOLD}%-8s${C_RESET}\033[K\n" \
           "$name" "$sf" "$bar" "$icon" "$tag"
       else
-        printf "    ${check} %-32s %10s %s %s ${rc}%-8s${C_RESET}\033[K\n" \
+        printf "    ${check} %-${UI_NAME_WIDTH}s %10s %s %s ${rc}%-8s${C_RESET}\033[K\n" \
           "$name" "$sf" "$bar" "$icon" "$tag"
       fi
       ((drawn++))
@@ -1034,393 +1091,6 @@ _interactive_select_flat() {
         ;;
     esac
     _draw_flat "redraw"
-  done
-
-  tput cnorm 2>/dev/null
-  stty sane 2>/dev/null
-}
-
-# ── Tree selector (bash 4+ — collapsible categories) ───────────────────────
-
-_interactive_select_tree() {
-  local num=$1
-
-  # Build category tree structure
-  declare -a _tree_cat_order=()    # unique cats in order
-  declare -A _tree_cat_items=()    # cat → "sorted_idx1,sorted_idx2,..."
-  declare -A _tree_cat_kb=()       # cat → total kb
-  declare -A _tree_cat_collapsed=() # cat → 0/1
-  declare -A _tree_cat_max=()      # cat → max item kb (for bars)
-
-  for ((si=0; si<num; si++)); do
-    local real_idx="${SORTED[$si]#*|}"
-    local cat="${T_CATS[$real_idx]}"
-    if [[ -z "${_tree_cat_items[$cat]+x}" ]]; then
-      _tree_cat_order+=("$cat")
-      _tree_cat_items[$cat]=""
-      _tree_cat_kb[$cat]=0
-      _tree_cat_collapsed[$cat]=0
-      _tree_cat_max[$cat]=0
-    fi
-    if [[ -n "${_tree_cat_items[$cat]}" ]]; then
-      _tree_cat_items[$cat]+=","
-    fi
-    _tree_cat_items[$cat]+="$si"
-    _tree_cat_kb[$cat]=$(( ${_tree_cat_kb[$cat]} + T_SIZES[$real_idx] ))
-    (( T_SIZES[$real_idx] > _tree_cat_max[$cat] )) && _tree_cat_max[$cat]=${T_SIZES[$real_idx]}
-  done
-
-  # Collapse categories with >8 items by default; Untouchable always collapsed
-  for cat in "${_tree_cat_order[@]}"; do
-    IFS=',' read -ra _tmp_items <<< "${_tree_cat_items[$cat]}"
-    if (( ${#_tmp_items[@]} > 8 )) || [[ "$cat" == "Untouchable" ]]; then
-      _tree_cat_collapsed[$cat]=1
-    fi
-  done
-
-  # Build flat visible-row list
-  # Each row is "cat:CAT_NAME" or "item:SORTED_IDX"
-  build_visible_rows() {
-    _visible_rows=()
-    for cat in "${_tree_cat_order[@]}"; do
-      _visible_rows+=("cat:$cat")
-      if [[ "${_tree_cat_collapsed[$cat]}" == "0" ]]; then
-        IFS=',' read -ra items <<< "${_tree_cat_items[$cat]}"
-        for si in "${items[@]}"; do
-          _visible_rows+=("item:$si")
-        done
-      fi
-    done
-  }
-
-  declare -a _visible_rows=()
-  build_visible_rows
-  local cursor=0 scroll=0
-  local _sort_mode=0  # 0=Size, 1=Name, 2=Risk, 3=Category
-  local -a _sort_labels=("▼ Size" "▲ Name" "Risk" "Category")
-
-  _risk_rank() {
-    case "$1" in SAFE) echo 0 ;; REBUILD) echo 1 ;; PERSONAL) echo 2 ;; *) echo 3 ;; esac
-  }
-
-  _do_sort() {
-    local -a new_sorted=()
-    case $_sort_mode in
-      0) while IFS= read -r line; do new_sorted+=("$line"); done < \
-           <(for ((i=0; i<num; i++)); do
-             local ri="${SORTED[$i]#*|}"
-             printf "%d|%d\n" "${T_SIZES[$ri]}" "$ri"
-           done | sort -t'|' -k1 -rn)
-         ;;
-      1) while IFS= read -r line; do new_sorted+=("$line"); done < \
-           <(for ((i=0; i<num; i++)); do
-             local ri="${SORTED[$i]#*|}"
-             printf "%s|%d\n" "${T_NAMES[$ri]}" "$ri"
-           done | sort -t'|' -k1 -f)
-         ;;
-      2) while IFS= read -r line; do new_sorted+=("$line"); done < \
-           <(for ((i=0; i<num; i++)); do
-             local ri="${SORTED[$i]#*|}"
-             printf "%d|%d\n" "$(_risk_rank "${T_RISKS[$ri]}")" "$ri"
-           done | sort -t'|' -k1 -n)
-         ;;
-      3) while IFS= read -r line; do new_sorted+=("$line"); done < \
-           <(for ((i=0; i<num; i++)); do
-             local ri="${SORTED[$i]#*|}"
-             printf "%s|%d\n" "${T_CATS[$ri]}" "$ri"
-           done | sort -t'|' -k1 -f)
-         ;;
-    esac
-    for ((i=0; i<${#new_sorted[@]}; i++)); do
-      local ri="${new_sorted[$i]#*|}"
-      SORTED[$i]="${T_SIZES[$ri]}|$ri"
-    done
-  }
-
-  _rebuild_tree() {
-    _tree_cat_order=()
-    for k in "${!_tree_cat_items[@]}"; do unset "_tree_cat_items[$k]"; done
-    for k in "${!_tree_cat_kb[@]}"; do unset "_tree_cat_kb[$k]"; done
-    for k in "${!_tree_cat_max[@]}"; do unset "_tree_cat_max[$k]"; done
-    for ((si=0; si<num; si++)); do
-      local real_idx="${SORTED[$si]#*|}"
-      local cat="${T_CATS[$real_idx]}"
-      if [[ -z "${_tree_cat_items[$cat]+x}" ]]; then
-        _tree_cat_order+=("$cat")
-        _tree_cat_items[$cat]=""
-        _tree_cat_kb[$cat]=0
-        _tree_cat_max[$cat]=0
-        [[ -z "${_tree_cat_collapsed[$cat]+x}" ]] && _tree_cat_collapsed[$cat]=0
-      fi
-      [[ -n "${_tree_cat_items[$cat]}" ]] && _tree_cat_items[$cat]+=","
-      _tree_cat_items[$cat]+="$si"
-      _tree_cat_kb[$cat]=$(( ${_tree_cat_kb[$cat]} + T_SIZES[$real_idx] ))
-      (( T_SIZES[$real_idx] > _tree_cat_max[$cat] )) && _tree_cat_max[$cat]=${T_SIZES[$real_idx]}
-    done
-  }
-
-  # TUI setup
-  detect_term_size
-  # Reserve lines for status(3) + detail(8) + scroll indicators(2) + padding(1) = 14
-  local page_size=$(( TERM_LINES > 14 ? TERM_LINES - 14 : 10 ))
-  (( page_size < 5 )) && page_size=5
-
-  tput civis 2>/dev/null
-  stty -echo -icanon 2>/dev/null
-  trap 'tput cnorm 2>/dev/null; stty sane 2>/dev/null' EXIT INT TERM
-
-  draw_tree() {
-    # Move to top if redrawing
-    [[ "${1:-}" == "redraw" ]] && printf '\033[%dA' "$_last_draw_lines"
-
-    local sel_kb=0 sel_count=0
-    for ((i=0; i<num; i++)); do
-      if [[ "${SELECTED[$i]}" == "1" ]]; then
-        local ri="${SORTED[$i]#*|}"
-        sel_kb=$((sel_kb + T_SIZES[$ri]))
-        ((sel_count++)) || true
-      fi
-    done
-
-    local total_rows=${#_visible_rows[@]}
-    # Adjust scroll window to keep cursor visible
-    (( cursor < scroll )) && scroll=$cursor
-    (( cursor >= scroll + page_size )) && scroll=$(( cursor - page_size + 1 ))
-    local end=$(( scroll + page_size ))
-    (( end > total_rows )) && end=$total_rows
-
-    local drawn=0
-
-    # Scroll indicator top
-    if (( scroll > 0 )); then
-      printf "  ${C_DIM}  ▲ %d more above${C_RESET}\033[K\n" "$scroll"
-    else
-      printf "\033[K\n"
-    fi
-    ((drawn++))
-
-    for ((r=scroll; r<end; r++)); do
-      local row="${_visible_rows[$r]}"
-      local row_type="${row%%:*}"
-      local row_val="${row#*:}"
-      local is_cursor=""
-      (( r == cursor )) && is_cursor=">"
-
-      if [[ "$row_type" == "cat" ]]; then
-        local cat="$row_val"
-        local arrow
-        [[ "${_tree_cat_collapsed[$cat]}" == "0" ]] && arrow="▼" || arrow="▶"
-        local cat_size
-        cat_size=$(fmt "${_tree_cat_kb[$cat]}")
-        # Count items in category
-        IFS=',' read -ra _citems <<< "${_tree_cat_items[$cat]}"
-        local ccount=${#_citems[@]}
-
-        if [[ -n "$is_cursor" ]]; then
-          printf "  ${C_BOLD}${C_INFO}%s %s %s${C_RESET}  ${C_DIM}(%s, %d items)${C_RESET}\033[K\n" \
-            "$is_cursor" "$arrow" "$cat" "$cat_size" "$ccount"
-        else
-          printf "  ${C_BOLD}  %s %s${C_RESET}  ${C_DIM}(%s, %d items)${C_RESET}\033[K\n" \
-            "$arrow" "$cat" "$cat_size" "$ccount"
-        fi
-      else
-        local si="$row_val"
-        local ri="${SORTED[$si]#*|}"
-        local name="${T_NAMES[$ri]}"
-        (( ${#name} > 28 )) && name="${name:0:25}..."
-        local sf
-        if [[ "${T_METHODS[$ri]}" == "tm-thin" ]]; then
-          sf="${TM_SNAP_COUNT} snaps"
-        else
-          sf=$(fmt "${T_SIZES[$ri]}")
-        fi
-        local tag="${T_RISKS[$ri]}"
-        local rc
-        rc=$(risk_color "$tag")
-        local icon
-        icon=$(risk_icon "$tag")
-        local cat="${T_CATS[$ri]}"
-        local bar
-        bar=$(draw_bar "${T_SIZES[$ri]}" "${_tree_cat_max[$cat]}" "$UI_BAR_WIDTH")
-
-        local check="[ ]"
-        [[ "${SELECTED[$si]}" == "1" ]] && check="[x]"
-
-        if [[ -n "$is_cursor" ]]; then
-          printf "  ${C_BOLD}${C_INFO}>   ${check}${C_RESET} %-28s %10s %s %s ${rc}${C_BOLD}%-8s${C_RESET}\033[K\n" \
-            "$name" "$sf" "$bar" "$icon" "$tag"
-        else
-          printf "      ${check} %-28s %10s %s %s ${rc}%-8s${C_RESET}\033[K\n" \
-            "$name" "$sf" "$bar" "$icon" "$tag"
-        fi
-      fi
-      ((drawn++))
-    done
-
-    # Scroll indicator bottom
-    local remaining=$(( total_rows - end ))
-    if (( remaining > 0 )); then
-      printf "  ${C_DIM}  ▼ %d more below${C_RESET}\033[K\n" "$remaining"
-    else
-      printf "\033[K\n"
-    fi
-    ((drawn++))
-
-    # Status bar
-    printf "\033[K\n"
-    printf "  ${C_BOLD}Selected: %d/%d items — %s${C_RESET}\033[K\n" "$sel_count" "$num" "$(fmt $sel_kb)"
-    printf "  ${C_DIM}↑↓ move  ␣ toggle  →/← expand/collapse  A all  N none  s Sort: %s  / Search  ⏎ confirm  q quit${C_RESET}\033[K\n" "${_sort_labels[$_sort_mode]}"
-    drawn=$((drawn + 3))
-
-    # Detail panel for current item (only if cursor is on an item)
-    local crow="${_visible_rows[$cursor]}"
-    if [[ "${crow%%:*}" == "item" ]]; then
-      local csi="${crow#*:}"
-      local cri="${SORTED[$csi]#*|}"
-      printf "\033[K\n"
-      printf "  "; render_detail_panel "$cri"
-      # Count lines in detail panel (box title + 5 content lines + bottom = 7)
-      drawn=$((drawn + 8))
-    fi
-
-    _last_draw_lines=$drawn
-  }
-
-  local _last_draw_lines=0
-  draw_tree
-
-  while true; do
-    IFS= read -rsn1 key
-    case "$key" in
-      $'\x1b')
-        read -rsn2 seq
-        case "$seq" in
-          '[A') # Up
-            (( cursor > 0 )) && ((cursor--))
-            ;;
-          '[B') # Down
-            (( cursor < ${#_visible_rows[@]} - 1 )) && ((cursor++))
-            ;;
-          '[C') # Right — expand category
-            local crow="${_visible_rows[$cursor]}"
-            if [[ "${crow%%:*}" == "cat" ]]; then
-              _tree_cat_collapsed["${crow#*:}"]=0
-              build_visible_rows
-            fi
-            ;;
-          '[D') # Left — collapse category
-            local crow="${_visible_rows[$cursor]}"
-            if [[ "${crow%%:*}" == "cat" ]]; then
-              _tree_cat_collapsed["${crow#*:}"]=1
-              build_visible_rows
-            elif [[ "${crow%%:*}" == "item" ]]; then
-              # Find parent category and collapse it
-              local csi="${crow#*:}"
-              local cri="${SORTED[$csi]#*|}"
-              local ccat="${T_CATS[$cri]}"
-              _tree_cat_collapsed["$ccat"]=1
-              build_visible_rows
-              # Move cursor to the category header
-              for ((r=0; r<${#_visible_rows[@]}; r++)); do
-                [[ "${_visible_rows[$r]}" == "cat:$ccat" ]] && { cursor=$r; break; }
-              done
-            fi
-            ;;
-        esac
-        ;;
-      ' ') # Toggle
-        local crow="${_visible_rows[$cursor]}"
-        if [[ "${crow%%:*}" == "item" ]]; then
-          local csi="${crow#*:}"
-          if [[ "${SELECTED[$csi]}" == "1" ]]; then
-            SELECTED[$csi]=0
-          else
-            SELECTED[$csi]=1
-          fi
-        elif [[ "${crow%%:*}" == "cat" ]]; then
-          # Toggle all items in category
-          local ccat="${crow#*:}"
-          IFS=',' read -ra _citems <<< "${_tree_cat_items[$ccat]}"
-          # Check if all selected — if so, deselect all; otherwise select all
-          local all_sel=true
-          for csi in "${_citems[@]}"; do
-            [[ "${SELECTED[$csi]}" != "1" ]] && all_sel=false && break
-          done
-          local new_val=1
-          $all_sel && new_val=0
-          for csi in "${_citems[@]}"; do SELECTED[$csi]=$new_val; done
-        fi
-        ;;
-      'a'|'A') for ((i=0; i<num; i++)); do SELECTED[$i]=1; done ;;
-      'n'|'N') for ((i=0; i<num; i++)); do SELECTED[$i]=0; done ;;
-      's'|'S')
-        _sort_mode=$(( (_sort_mode + 1) % 4 ))
-        _do_sort
-        _rebuild_tree
-        build_visible_rows
-        cursor=0; scroll=0
-        ;;
-      '/')
-        # Search filter — read substring, filter visible items
-        printf "\r\033[K  ${C_BOLD}Filter:${C_RESET} "
-        local filter_str=""
-        while true; do
-          IFS= read -rsn1 fk
-          case "$fk" in
-            ''|$'\n') break ;;
-            $'\x1b') filter_str=""; break ;;
-            $'\x7f'|$'\b')
-              if [[ -n "$filter_str" ]]; then
-                filter_str="${filter_str%?}"
-                printf "\r\033[K  ${C_BOLD}Filter:${C_RESET} %s" "$filter_str"
-              fi
-              ;;
-            *)
-              filter_str+="$fk"
-              printf "%s" "$fk"
-              ;;
-          esac
-        done
-        if [[ -n "$filter_str" ]]; then
-          _visible_rows=()
-          local lc_filter
-          lc_filter=$(printf '%s' "$filter_str" | tr '[:upper:]' '[:lower:]')
-          for cat in "${_tree_cat_order[@]}"; do
-            local has_match=false
-            IFS=',' read -ra items <<< "${_tree_cat_items[$cat]}"
-            local matching_items=()
-            for si in "${items[@]}"; do
-              local ri="${SORTED[$si]#*|}"
-              local lc_name
-              lc_name=$(printf '%s' "${T_NAMES[$ri]}" | tr '[:upper:]' '[:lower:]')
-              if [[ "$lc_name" == *"$lc_filter"* ]]; then
-                has_match=true
-                matching_items+=("$si")
-              fi
-            done
-            if $has_match; then
-              _visible_rows+=("cat:$cat")
-              _tree_cat_collapsed[$cat]=0
-              for si in "${matching_items[@]}"; do
-                _visible_rows+=("item:$si")
-              done
-            fi
-          done
-          cursor=0; scroll=0
-        else
-          build_visible_rows
-        fi
-        ;;
-      ''|$'\n') break ;;
-      'q'|'Q')
-        tput cnorm 2>/dev/null
-        stty sane 2>/dev/null
-        echo ""
-        printf "  ${C_DIM}Cancelled. Nothing was deleted.${C_RESET}\n"
-        exit 0
-        ;;
-    esac
-    draw_tree "redraw"
   done
 
   tput cnorm 2>/dev/null
@@ -1501,7 +1171,11 @@ if matches_profile "System"; then
   for ((i=0; i<${#T_NAMES[@]}; i++)); do
     [[ "${T_NAMES[$i]}" == "★ iOS"* ]] && ((++ios_found)) && ios_kb=$((ios_kb + T_SIZES[$i]))
   done
-  cat_footer "$ios_found" "$ios_kb"
+  if (( ios_found > 0 )); then
+    cat_footer "$ios_found" "$ios_kb"
+  else
+    log "  ${DIM}└─── nothing found${NC}\n"
+  fi
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1525,11 +1199,12 @@ if matches_profile "System"; then
 
   # Apple Screensavers (idleassetsd) — requires sudo + special path search
   if ! is_excluded "/private/var/folders"; then
-    log "\r\033[K  │  ${DIM}…${NC}  %-44s" "Apple Screensavers (idleassetsd)"
+    logp "\r\033[K  ${DIM}⠹ Scanning Apple Screensavers (idleassetsd)${NC}"
     IDLE_PATH=$(sudo find /private/var/folders -name "com.apple.idleassetsd" -maxdepth 6 2>/dev/null | head -1)
     if [[ -n "$IDLE_PATH" ]]; then
       idle_kb=$(get_kb_sudo "$IDLE_PATH")
       if (( idle_kb > MIN_SIZE_KB )); then
+        _flush_cat_header
         T_NAMES+=("Apple Screensavers (idleassetsd)")
         T_PATHS+=("$IDLE_PATH")
         T_SIZES+=("$idle_kb")
@@ -1539,10 +1214,10 @@ if matches_profile "System"; then
         FOUND_TOTAL=$((FOUND_TOTAL + idle_kb))
         log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Apple Screensavers (idleassetsd)" "$(fmt "$idle_kb")"
       else
-        log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "Apple Screensavers (idleassetsd)"
+        logp "\r\033[K"
       fi
     else
-      log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "Apple Screensavers (idleassetsd)"
+      logp "\r\033[K"
     fi
   fi
 
@@ -1566,6 +1241,7 @@ if matches_profile "System"; then
   scan_target "Siri Caches"         "$HOME/Library/Caches/com.apple.siri.embeddings" "System" "SAFE" "rm"
 
   # Dynamic scan: /System/Library/AssetsV2/* > 100 MB
+  # SIP-protected on Tahoe — route to Untouchable if is_sip_protected
   if [[ -d "/System/Library/AssetsV2" ]]; then
     while IFS=$'\t' read -r kb path; do
       [[ -z "$kb" || -z "$path" ]] && continue
@@ -1574,14 +1250,23 @@ if matches_profile "System"; then
       (( kb > 102400 )) || continue  # > 100 MB
       is_excluded "$path" && continue
 
-      T_NAMES+=("ML Asset: $base")
-      T_PATHS+=("$path")
-      T_SIZES+=("$kb")
-      T_CATS+=("System")
-      T_RISKS+=("SAFE")
-      T_METHODS+=("rm-sudo")
-      FOUND_TOTAL=$((FOUND_TOTAL + kb))
-      log "  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "ML Asset: $base" "$(fmt "$kb")"
+      if is_sip_protected "$path"; then
+        U_NAMES+=("ML Asset: $base")
+        U_PATHS+=("$path")
+        U_SIZES+=("$kb")
+        U_DESCS+=("Apple Intelligence model. /System/Library/AssetsV2/ is protected by SIP on macOS Tahoe. Apple manages these models automatically. To free space, disable Apple Intelligence in Settings.")
+        U_TOTAL=$((U_TOTAL + kb))
+      else
+        _flush_cat_header
+        T_NAMES+=("ML Asset: $base")
+        T_PATHS+=("$path")
+        T_SIZES+=("$kb")
+        T_CATS+=("System")
+        T_RISKS+=("SAFE")
+        T_METHODS+=("rm-sudo")
+        FOUND_TOTAL=$((FOUND_TOTAL + kb))
+        log "  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "ML Asset: $base" "$(fmt "$kb")"
+      fi
     done < <(sudo du -sk /System/Library/AssetsV2/*/ 2>/dev/null | sort -nr)
   fi
 
@@ -1594,20 +1279,43 @@ if matches_profile "System"; then
       (( kb > 102400 )) || continue
       is_excluded "$path" && continue
 
-      T_NAMES+=("Mobile Asset: $base")
-      T_PATHS+=("$path")
-      T_SIZES+=("$kb")
-      T_CATS+=("System")
-      T_RISKS+=("SAFE")
-      T_METHODS+=("rm-sudo")
-      FOUND_TOTAL=$((FOUND_TOTAL + kb))
-      log "  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Mobile Asset: $base" "$(fmt "$kb")"
+      if is_sip_protected "$path"; then
+        U_NAMES+=("Mobile Asset: $base")
+        U_PATHS+=("$path")
+        U_SIZES+=("$kb")
+        U_DESCS+=("Apple Intelligence model under /private/var/MobileAsset/. Protected by SIP. Apple manages these automatically.")
+        U_TOTAL=$((U_TOTAL + kb))
+      else
+        _flush_cat_header
+        T_NAMES+=("Mobile Asset: $base")
+        T_PATHS+=("$path")
+        T_SIZES+=("$kb")
+        T_CATS+=("System")
+        T_RISKS+=("SAFE")
+        T_METHODS+=("rm-sudo")
+        FOUND_TOTAL=$((FOUND_TOTAL + kb))
+        log "  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Mobile Asset: $base" "$(fmt "$kb")"
+      fi
     done < <(sudo du -sk /private/var/MobileAsset/AssetsV2/*/ 2>/dev/null | sort -nr)
   fi
 
-  # Apple system assets
+  # Apple system assets — SIP-protected under /Library/Apple/
   if sudo test -d "/Library/Apple/System/Library/Assets" 2>/dev/null; then
-    scan_target "Apple System Assets" "/Library/Apple/System/Library/Assets" "System" "SAFE" "rm-sudo"
+    local _asa_path="/Library/Apple/System/Library/Assets"
+    if is_sip_protected "$_asa_path"; then
+      local _asa_kb
+      _asa_kb=$(sudo du -sk "$_asa_path" 2>/dev/null | awk '{print $1}')
+      _asa_kb=${_asa_kb:-0}
+      if (( _asa_kb > 0 )); then
+        U_NAMES+=("Apple System Assets")
+        U_PATHS+=("$_asa_path")
+        U_SIZES+=("$_asa_kb")
+        U_DESCS+=("System assets managed by Apple. Protected by SIP under /Library/Apple/.")
+        U_TOTAL=$((U_TOTAL + _asa_kb))
+      fi
+    else
+      scan_target "Apple System Assets" "$_asa_path" "System" "SAFE" "rm-sudo"
+    fi
   fi
 
   ai_count=0; ai_kb=0
@@ -1634,14 +1342,28 @@ if matches_profile "Dev Tools"; then
   scan_target "Xcode Products"           "$HOME/Library/Developer/Xcode/Products"            "Dev Tools" "SAFE" "rm"
   scan_target "Xcode Cache"              "$HOME/Library/Caches/com.apple.dt.Xcode"           "Dev Tools" "SAFE" "rm"
   scan_target "iOS Simulators"           "$HOME/Library/Developer/CoreSimulator"              "Dev Tools" "SAFE" "rm"
-  scan_target "Simulator Volumes"        "/Library/Developer/CoreSimulator/Volumes"           "Dev Tools" "SAFE" "rm-sudo"
+  # Simulator Volumes — SIP-protected on Tahoe, moved to Untouchable.
+  # xcrun simctl delete unavailable (below) handles simulator cleanup.
+  local _simvol_path="/Library/Developer/CoreSimulator/Volumes"
+  if [[ -d "$_simvol_path" ]]; then
+    local _simvol_kb
+    _simvol_kb=$(get_kb_sudo "$_simvol_path")
+    if (( _simvol_kb > 0 )); then
+      U_NAMES+=("Simulator Volumes (CoreSimulator runtimes)")
+      U_PATHS+=("$_simvol_path")
+      U_SIZES+=("$_simvol_kb")
+      U_DESCS+=("/Library/Developer/CoreSimulator/Volumes/ is protected by SIP on macOS Tahoe. No official command to delete it. xcrun simctl delete unavailable only removes simulators, not volume runtimes. Apple manages these when you update Xcode.")
+      U_TOTAL=$((U_TOTAL + _simvol_kb))
+    fi
+  fi
   scan_target "Simulator Runtimes"       "/Library/Developer/CoreSimulator/Profiles/Runtimes" "Dev Tools" "SAFE" "rm-sudo"
 
   # Delete unavailable simulators if xcrun is available
   if has_cmd xcrun; then
-    log "\r\033[K  │  ${DIM}…${NC}  %-44s" "Unavailable Simulators"
+    logp "\r\033[K  ${DIM}⠹ Scanning Unavailable Simulators${NC}"
     unavail_count=$(xcrun simctl list devices unavailable 2>/dev/null | grep -c "unavailable" || true)
     if (( unavail_count > 0 )); then
+      _flush_cat_header
       T_NAMES+=("Unavailable Simulators (${unavail_count})")
       T_PATHS+=("__xcrun_simctl__")
       T_SIZES+=("0")
@@ -1650,7 +1372,7 @@ if matches_profile "Dev Tools"; then
       T_METHODS+=("xcrun-sim")
       log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Unavailable Simulators" "${unavail_count} devs"
     else
-      log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "Unavailable Simulators"
+      logp "\r\033[K"
     fi
   fi
 
@@ -1665,9 +1387,10 @@ if matches_profile "Dev Tools"; then
     matches_profile "Dev Tools" || continue
     is_excluded "$code_dir" && continue
 
-    log "\r\033[K  │  ${DIM}…${NC}  %-44s" "node_modules (~/$dir_name)"
+    logp "\r\033[K  ${DIM}⠹ Scanning node_modules (~/$dir_name)${NC}"
     nm_kb=$(find "$code_dir" -name "node_modules" -maxdepth 4 -type d -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
     if (( nm_kb > MIN_SIZE_KB )); then
+      _flush_cat_header
       T_NAMES+=("node_modules (~/$dir_name)")
       T_PATHS+=("$code_dir")
       T_SIZES+=("$nm_kb")
@@ -1677,7 +1400,7 @@ if matches_profile "Dev Tools"; then
       FOUND_TOTAL=$((FOUND_TOTAL + nm_kb))
       log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "node_modules (~/$dir_name)" "$(fmt "$nm_kb")"
     else
-      log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "node_modules (~/$dir_name)"
+      logp "\r\033[K"
     fi
   done
 
@@ -1687,7 +1410,7 @@ if matches_profile "Dev Tools"; then
     dir_name="$(basename "$code_dir")"
     is_excluded "$code_dir" && continue
 
-    log "\r\033[K  │  ${DIM}…${NC}  %-44s" "Rust targets (~/$dir_name)"
+    logp "\r\033[K  ${DIM}⠹ Scanning Rust targets (~/$dir_name)${NC}"
     rust_kb=0
     rust_found=false
     while IFS= read -r cargo_file; do
@@ -1700,6 +1423,7 @@ if matches_profile "Dev Tools"; then
     done < <(find "$code_dir" -name "Cargo.toml" -maxdepth 5 2>/dev/null)
 
     if $rust_found && (( rust_kb > MIN_SIZE_KB )); then
+      _flush_cat_header
       T_NAMES+=("Rust targets (~/$dir_name)")
       T_PATHS+=("$code_dir")
       T_SIZES+=("$rust_kb")
@@ -1709,7 +1433,7 @@ if matches_profile "Dev Tools"; then
       FOUND_TOTAL=$((FOUND_TOTAL + rust_kb))
       log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "Rust targets (~/$dir_name)" "$(fmt "$rust_kb")"
     else
-      log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "Rust targets (~/$dir_name)"
+      logp "\r\033[K"
     fi
   done
 
@@ -1787,11 +1511,12 @@ if [[ "$DEV_ARTIFACTS" == true ]] && matches_profile "Dev Tools"; then
     is_excluded "$code_dir" && continue
 
     for artifact in "${ARTIFACT_DIRS[@]}"; do
-      log "\r\033[K  │  ${DIM}…${NC}  %-44s" "${artifact} (~/$dir_name)"
+      logp "\r\033[K  ${DIM}⠹ Scanning ${artifact} (~/$dir_name)${NC}"
 
       art_kb=$(find "$code_dir" -name "$artifact" -maxdepth 5 -type d -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
 
       if (( art_kb > MIN_SIZE_KB )); then
+        _flush_cat_header
         T_NAMES+=("${artifact} (~/$dir_name)")
         T_PATHS+=("$code_dir")
         T_SIZES+=("$art_kb")
@@ -1801,7 +1526,7 @@ if [[ "$DEV_ARTIFACTS" == true ]] && matches_profile "Dev Tools"; then
         FOUND_TOTAL=$((FOUND_TOTAL + art_kb))
         log "\r\033[K  │  ${GREEN}✓${NC}  %-44s ${BOLD}%10s${NC}\n" "${artifact} (~/$dir_name)" "$(fmt "$art_kb")"
       else
-        log "\r\033[K  │  ${DIM}·${NC}  ${DIM}%-44s${NC}\n" "${artifact} (~/$dir_name)"
+        logp "\r\033[K"
       fi
     done
   done
@@ -1855,8 +1580,9 @@ if matches_profile "App"; then
 
     kb=$(get_kb "$cdir")
     if (( kb > MIN_SIZE_KB )); then
+      _flush_cat_header
       short="${container}"
-      (( ${#short} > 30 )) && short="${short:0:27}..."
+      short=$(truncate_middle "$short" 30)
       T_NAMES+=("Container: $short")
       T_PATHS+=("$cdir")
       T_SIZES+=("$kb")
@@ -1881,8 +1607,9 @@ if matches_profile "App"; then
 
     kb=$(get_kb "$gdir")
     if (( kb > MIN_SIZE_KB )); then
+      _flush_cat_header
       short="${group}"
-      (( ${#short} > 30 )) && short="${short:0:27}..."
+      short=$(truncate_middle "$short" 30)
       T_NAMES+=("Group: $short")
       T_PATHS+=("$gdir")
       T_SIZES+=("$kb")
@@ -2015,11 +1742,16 @@ if matches_profile "Cache"; then
       base=$(basename "$path")
       name="Cache: $base"
 
-      # Skip items already added (CocoaPods, Homebrew, Yarn, pip)
+      # Skip items covered by dedicated scanners (Package Managers phase runs later)
       already=false
-      for existing in "${T_PATHS[@]+"${T_PATHS[@]}"}"; do
-        [[ "$existing" == "$path" ]] && already=true && break
-      done
+      case "$base" in
+        Homebrew|CocoaPods|Yarn|pip|go-build) already=true ;;
+      esac
+      if ! $already; then
+        for existing in "${T_PATHS[@]+"${T_PATHS[@]}"}"; do
+          [[ "$existing" == "$path" ]] && already=true && break
+        done
+      fi
       $already && continue
 
       is_excluded "$path" && continue
@@ -2027,6 +1759,7 @@ if matches_profile "Cache"; then
 
       kb=$(echo "$size" | tr -d '[:space:]')
       if (( kb > MIN_SIZE_KB )); then
+        _flush_cat_header
         T_NAMES+=("$name")
         T_PATHS+=("$path")
         T_SIZES+=("$kb")
@@ -2075,23 +1808,30 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   cat_header "Ghost Apps" "$RED"
   ghost_start=${#T_NAMES[@]}
 
-  log "  │  ${DIM}Checking for leftover data from uninstalled apps...${NC}\n"
+  logp "\r\033[K  ${DIM}⠹ Building installed apps index...${NC}"
+
+  # Single-pass: collect all installed bundle IDs once (O(1) lookups after)
+  _INSTALLED_BIDS=""
+  for app_dir in /Applications ~/Applications /System/Applications; do
+    [[ -d "$app_dir" ]] || continue
+    while IFS= read -r plist; do
+      local pbid
+      pbid=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist" 2>/dev/null || true)
+      [[ -n "$pbid" ]] && _INSTALLED_BIDS+=$'\n'"$pbid"
+    done < <(find "$app_dir" -name "Info.plist" -maxdepth 4 2>/dev/null)
+  done
+  # Add Spotlight results in one batch
+  while IFS= read -r sbid; do
+    [[ -n "$sbid" ]] && _INSTALLED_BIDS+=$'\n'"$sbid"
+  done < <(mdfind "kMDItemContentType == 'com.apple.application-bundle'" 2>/dev/null \
+    | while IFS= read -r app; do
+        /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$app/Contents/Info.plist" 2>/dev/null
+      done)
+  logp "\r\033[K"
 
   is_app_installed() {
     local bid="$1"
-    # Check common app locations
-    for app_dir in /Applications ~/Applications /System/Applications; do
-      if [[ -d "$app_dir" ]]; then
-        while IFS= read -r plist; do
-          local pbid
-          pbid=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist" 2>/dev/null || true)
-          [[ "$pbid" == "$bid" ]] && return 0
-        done < <(find "$app_dir" -name "Info.plist" -maxdepth 4 2>/dev/null)
-      fi
-    done
-    # Fallback to Spotlight
-    mdfind "kMDItemCFBundleIdentifier == '$bid'" 2>/dev/null | grep -q ".app" && return 0
-    return 1
+    printf '%s' "$_INSTALLED_BIDS" | grep -qxF "$bid"
   }
 
   # Check ~/Library/Containers/*
@@ -2105,8 +1845,9 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
     if ! is_app_installed "$bid"; then
       kb=$(get_kb "$cdir")
       if (( kb > MIN_SIZE_KB )); then
+        _flush_cat_header
         short="$bid"
-        (( ${#short} > 36 )) && short="${short:0:33}..."
+        short=$(truncate_middle "$short" 36)
         T_NAMES+=("Ghost: $short")
         T_PATHS+=("$cdir")
         T_SIZES+=("$kb")
@@ -2138,8 +1879,9 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
     if ! is_app_installed "$bid"; then
       kb=$(get_kb "$asdir")
       if (( kb > MIN_SIZE_KB )); then
+        _flush_cat_header
         short="$bid"
-        (( ${#short} > 36 )) && short="${short:0:33}..."
+        short=$(truncate_middle "$short" 36)
         T_NAMES+=("Ghost: $short")
         T_PATHS+=("$asdir")
         T_SIZES+=("$kb")
@@ -2201,6 +1943,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
       local kb
       kb=$(get_kb "$utm_bundle")
       if (( kb > MIN_SIZE_KB )); then
+        _flush_cat_header
         T_NAMES+=("UTM: $bname")
         T_PATHS+=("$utm_bundle")
         T_SIZES+=("$kb")
@@ -2225,6 +1968,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
       local _lima_kb
       _lima_kb=$(get_kb "$_lima_sub")
       if (( _lima_kb > MIN_SIZE_KB )); then
+        _flush_cat_header
         T_NAMES+=("Lima: $_lima_name")
         T_PATHS+=("$_lima_sub")
         T_SIZES+=("$_lima_kb")
@@ -2244,11 +1988,12 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   # A4: OrbStack �� sparse file, use du not ls
   local _orbstack_data="$HOME/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data"
   if [[ -d "$_orbstack_data" ]]; then
-    log "\r\033[K  │  ${C_DIM}…${C_RESET}  %-44s" "OrbStack data"
+    logp "\r\033[K  ${C_DIM}⠹ Scanning OrbStack data${C_RESET}"
     local orb_kb
     orb_kb=$(du -sk "$_orbstack_data" 2>/dev/null | awk '{print $1}')
     orb_kb=${orb_kb:-0}
     if (( orb_kb > MIN_SIZE_KB )); then
+      _flush_cat_header
       T_NAMES+=("OrbStack data (sparse)")
       T_PATHS+=("$_orbstack_data")
       T_SIZES+=("$orb_kb")
@@ -2258,7 +2003,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
       FOUND_TOTAL=$((FOUND_TOTAL + orb_kb))
       log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "OrbStack data (sparse)" "$(fmt "$orb_kb")"
     else
-      log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "OrbStack data"
+      logp "\r\033[K"
     fi
   fi
 
@@ -2294,12 +2039,13 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   local docker_count=0 docker_kb=0
   local _docker_raw="$HOME/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"
   if [[ -f "$_docker_raw" ]]; then
-    log "\r\033[K  │  ${C_DIM}…${C_RESET}  %-44s" "Docker.raw"
+    logp "\r\033[K  ${C_DIM}⠹ Scanning Docker.raw${C_RESET}"
     # CRITICAL: use du for sparse file, never ls
     local docker_raw_kb
     docker_raw_kb=$(du -sk "$_docker_raw" 2>/dev/null | awk '{print $1}')
     docker_raw_kb=${docker_raw_kb:-0}
     if (( docker_raw_kb > MIN_SIZE_KB )); then
+      _flush_cat_header
       T_NAMES+=("Docker.raw (all images/volumes)")
       T_PATHS+=("__docker_prune__")
       T_SIZES+=("$docker_raw_kb")
@@ -2310,7 +2056,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
       docker_count=1; docker_kb=$docker_raw_kb
       log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "Docker.raw (all images/volumes)" "$(fmt "$docker_raw_kb")"
     else
-      log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "Docker.raw"
+      logp "\r\033[K"
     fi
   fi
   cat_footer "$docker_count" "$docker_kb"
@@ -2404,40 +2150,10 @@ if matches_profile "Personal" || matches_profile "System" || [[ "$PROFILE" == "a
   cat_footer "$mail_count" "$mail_kb"
 fi
 
-# ── A10: /private/var/folders/ — the forgotten temp ───────────────────────
-
-if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
-  if ! is_excluded "/private/var/folders"; then
-    cat_header "/var/folders" "$YELLOW"
-    vf_start=${#T_NAMES[@]}
-
-    log "  │  ${C_WARNING}⚠${C_RESET}  ${C_DIM}Scanning /private/var/folders/ requires admin access${C_RESET}\n"
-    # Scan top consumers dynamically
-    while IFS=$'\t' read -r kb path; do
-      [[ -z "$kb" || -z "$path" ]] && continue
-      kb=$(echo "$kb" | tr -d '[:space:]')
-      (( kb > MIN_SIZE_KB )) || continue
-      local vf_name
-      vf_name=$(basename "$path")
-      is_excluded "$path" && continue
-
-      T_NAMES+=("var/folders: $vf_name")
-      T_PATHS+=("$path")
-      T_SIZES+=("$kb")
-      T_CATS+=("System Temp")
-      T_RISKS+=("SAFE")
-      T_METHODS+=("rm-sudo")
-      FOUND_TOTAL=$((FOUND_TOTAL + kb))
-      log "  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "var/folders: $vf_name" "$(fmt "$kb")"
-    done < <(sudo du -sk /private/var/folders/*/*/ 2>/dev/null | sort -nr | head -20)
-
-    vf_count=0; vf_kb=0
-    for ((i=vf_start; i<${#T_CATS[@]}; i++)); do
-      [[ "${T_CATS[$i]}" == "System Temp" ]] && ((++vf_count)) && vf_kb=$((vf_kb + T_SIZES[$i]))
-    done
-    cat_footer "$vf_count" "$vf_kb"
-  fi
-fi
+# ── A10: /private/var/folders/ — moved to Untouchable (SIP/TCC protected) ──
+# These are daemon caches (TCC, Screen Time, cloudd, etc.) that macOS
+# protects with SIP. Even sudo rm -rf returns "Operation not permitted".
+# Apple cleans them automatically. Scanned as untouchable for transparency.
 
 # ── A11: Spotlight index ──────────────────────────────────────────────────
 
@@ -2451,22 +2167,23 @@ if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
     _spotlight_path="/.Spotlight-V100"
   fi
   if sudo test -d "$_spotlight_path" 2>/dev/null; then
-    log "\r\033[K  │  ${C_DIM}…${C_RESET}  %-44s" "Spotlight Index"
+    logp "\r\033[K  ${C_DIM}⠹ Scanning Spotlight Index${C_RESET}"
     local spot_kb
     spot_kb=$(sudo du -sk "$_spotlight_path" 2>/dev/null | awk '{print $1}')
     spot_kb=${spot_kb:-0}
     if (( spot_kb > MIN_SIZE_KB )); then
+      _flush_cat_header
       T_NAMES+=("Spotlight Index")
       T_PATHS+=("__spotlight_rebuild__")
       T_SIZES+=("$spot_kb")
       T_CATS+=("System")
-      T_RISKS+=("SAFE")
+      T_RISKS+=("REBUILD")
       T_METHODS+=("spotlight-rebuild")
       FOUND_TOTAL=$((FOUND_TOTAL + spot_kb))
       spot_count=1; spot_total_kb=$spot_kb
       log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "Spotlight Index" "$(fmt "$spot_kb")"
     else
-      log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "Spotlight Index"
+      logp "\r\033[K"
     fi
   fi
   cat_footer "$spot_count" "$spot_total_kb"
@@ -2741,10 +2458,11 @@ if has_cmd brew && (matches_profile "Pkg Manager" || [[ "$PROFILE" == "all" ]]);
   local _caskroom
   _caskroom="$(brew --prefix 2>/dev/null)/Caskroom"
   if [[ -d "$_caskroom" ]]; then
-    log "\r\033[K  │  ${C_DIM}…${C_RESET}  %-44s" "Caskroom installers"
+    logp "\r\033[K  ${C_DIM}⠹ Scanning Caskroom installers${C_RESET}"
     local cask_kb
     cask_kb=$(find "$_caskroom" -type f \( -name '*.dmg' -o -name '*.pkg' \) -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
     if (( cask_kb > MIN_SIZE_KB )); then
+      _flush_cat_header
       T_NAMES+=("Homebrew Caskroom installers")
       T_PATHS+=("$_caskroom")
       T_SIZES+=("$cask_kb")
@@ -2755,7 +2473,7 @@ if has_cmd brew && (matches_profile "Pkg Manager" || [[ "$PROFILE" == "all" ]]);
       cask_count=1; cask_total_kb=$cask_kb
       log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "Homebrew Caskroom installers" "$(fmt "$cask_kb")"
     else
-      log "\r\033[K  │  ${C_DIM}·${C_RESET}  ${C_DIM}%-44s${C_RESET}\n" "Caskroom installers"
+      logp "\r\033[K"
     fi
   fi
   cat_footer "$cask_count" "$cask_total_kb"
@@ -3009,6 +2727,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
       fi
     done < <(find "$_gc_dir" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
     if (( gc_count > 0 )); then
+      _flush_cat_header
       log "\r\033[K  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}  (%d items)\n" "Orphaned Group Containers" "$(fmt "$gc_kb")" "$gc_count"
     fi
   fi
@@ -3038,7 +2757,7 @@ fi
 
 # ── Untouchable scanners (E1-E6) — NEVER deletable, report only ─────────────
 
-cat_header "Untouchable" "$C_ACCENT"
+cat_header_direct "Untouchable" "$C_ACCENT"
 log "  │  ${C_WARNING}⚠${C_RESET}  ${C_DIM}Untouchable scan needs sudo to read sleepimage, Rosetta cache,${C_RESET}\n"
 log "  │     ${C_DIM}and swap files (all owned by system daemons).${C_RESET}\n"
 
@@ -3055,16 +2774,19 @@ scan_untouchable_target "dyld shared cache" "$_dyld_path" \
   "Despite the name, this is NOT a cache. It contains all macOS dynamic libraries pre-linked into a single file for faster app startup. An Apple engineer confirmed: 'it is slightly misnamed because it is not really a cache.' Deleting this = system won't boot. Protected by SIP and SSV. Why so big? Apple bundles libraries for all architectures (x86_64 + arm64 + arm64e) and every system framework."
 
 # E2: Rosetta 2 AOT cache (Apple Silicon only)
-if [[ "$(uname -m)" == "arm64" ]]; then
-  scan_untouchable_target "Rosetta 2 AOT cache" "/private/var/db/oah" \
-    "Rosetta 2 translates x86_64 binaries to arm64 ahead-of-time and stores the .aot results here so it doesn't have to retranslate every time you open an Intel app. Even if you delete it (requires disabling SIP), it regenerates as you open Intel apps. No benefit to cleaning it. Why so big? Every Intel binary you've ever opened has its translation stored here — blame Apple's Intel-to-Silicon transition."
+# SIP blocks even sudo du on Tahoe, so we detect existence but can't measure size.
+if [[ "$(uname -m)" == "arm64" ]] && [[ -d "/private/var/db/oah" ]]; then
+  U_NAMES+=("Rosetta 2 cache (/var/db/oah)")
+  U_PATHS+=("/private/var/db/oah")
+  U_SIZES+=("-1")
+  U_DESCS+=("Translated x86_64 binaries cache. SIP protects this path on Tahoe — even sudo du cannot measure it. Apple manages it automatically. If you never run Intel apps, this directory may not exist.")
 fi
 
 # E3: sleepimage — size equals your RAM
 scan_untouchable_target "sleepimage" "/private/var/vm/sleepimage" \
   "This file is exactly the size of your RAM because macOS dumps all memory here when the laptop enters deep hibernation (lid closed for long time or critical battery). You CAN reduce it to 0 with 'sudo pmset -a hibernatemode 0', but you'll lose the ability to hibernate — if battery dies completely, you lose unsaved work. Why so big? Apple optimized experience over disk space."
 
-# E4: swap files — created dynamically
+# E4: swap files — only exist on some machines (Tahoe Apple Silicon with enough RAM skips them)
 _swap_kb=0
 if [[ -d "/private/var/vm" ]]; then
   while IFS= read -r _sf; do
@@ -3087,22 +2809,38 @@ fi
 scan_untouchable_target "macOS Update packages" "/Library/Updates" \
   "Apple downloads system updates here before installing them. In theory they should be deleted after installing, but in practice they sometimes aren't. Protected by SIP — even sudo can't delete them. They eventually clean up on their own."
 
-# E6: Staged Frameworks — SIP-protected
-scan_untouchable_target "StagedFrameworks" "/Library/Apple/System/Library/StagedFrameworks" \
-  "Pre-staged framework translations for Rosetta. Managed entirely by the system. Protected by SIP. Untouchable."
+# E6: /private/var/folders/ — daemon caches, SIP/TCC protected
+_vf_kb=0
+if sudo test -d "/private/var/folders" 2>/dev/null; then
+  _vf_kb=$(sudo du -sk /private/var/folders 2>/dev/null | awk '{print $1}')
+  _vf_kb=${_vf_kb:-0}
+  [[ "$_vf_kb" =~ ^[0-9]+$ ]] || _vf_kb=0
+fi
+if (( _vf_kb > 0 )); then
+  U_NAMES+=("/var/folders (daemon caches)")
+  U_PATHS+=("/private/var/folders")
+  U_SIZES+=("$_vf_kb")
+  U_DESCS+=("Contains caches from system daemons (TCC, Screen Time, cloudd, ScreenTimeAgent, etc.). macOS protects these with SIP/TCC — even sudo rm -rf returns 'Operation not permitted'. Apple cleans them automatically when needed.")
+  U_TOTAL=$((U_TOTAL + _vf_kb))
+fi
 
-# Log untouchable summary
-local _u_count=${#U_NAMES[@]}
-if (( _u_count > 0 )); then
-  for (( ui=0; ui<_u_count; ui++ )); do
+# Log untouchable summary — count only visible items (size > 0 or size == -1 for unmeasurable)
+local _u_visible=0
+local _u_total_count=${#U_NAMES[@]}
+if (( _u_total_count > 0 )); then
+  for (( ui=0; ui<_u_total_count; ui++ )); do
     if (( U_SIZES[ui] > 0 )); then
       log "  │  ${C_ACCENT}🔒${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}  ${C_ACCENT}UNTOUCHABLE${C_RESET}\n" "${U_NAMES[$ui]}" "$(fmt "${U_SIZES[$ui]}")"
+      ((_u_visible++)) || true
+    elif (( U_SIZES[ui] == -1 )); then
+      log "  │  ${C_ACCENT}🔒${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}  ${C_ACCENT}UNTOUCHABLE${C_RESET}\n" "${U_NAMES[$ui]}" "—"
+      ((_u_visible++)) || true
     fi
   done
   log "  │\n"
   log "  │  ${C_DIM}Total untouchable: %s — shown for transparency, never deletable${C_RESET}\n" "$(fmt "$U_TOTAL")"
 fi
-cat_footer "$_u_count" "$U_TOTAL"
+cat_footer "$_u_visible" "$U_TOTAL"
 
 }
 run_all_scans
@@ -3234,7 +2972,7 @@ for entry in "${SORTED[@]}"; do
   (( T_SIZES[$i] > TABLE_MAX_KB )) && TABLE_MAX_KB=${T_SIZES[$i]}
 done
 
-printf "  ${C_DIM}%-3s  %-32s  %10s  %-10s  %-6s${C_RESET}\n" "#" "Name" "Size" "Bar" "Risk"
+printf "  ${C_DIM}%-3s  %-${UI_NAME_WIDTH}s  %10s  %-10s  %-6s${C_RESET}\n" "#" "Name" "Size" "Bar" "Risk"
 printf "  ${C_DIM}%s${C_RESET}\n" "────────────────────────────────────────────────────────────────────────────"
 
 idx=1
@@ -3251,12 +2989,11 @@ for entry in "${SORTED[@]}"; do
   rc=$(risk_color "$local_tag")
   icon=$(risk_icon "$local_tag")
 
-  name="${T_NAMES[$i]}"
-  (( ${#name} > 32 )) && name="${name:0:29}..."
+  name=$(truncate_middle "${T_NAMES[$i]}" "$UI_NAME_WIDTH")
 
   bar=$(draw_bar "${T_SIZES[$i]}" "$TABLE_MAX_KB" "$UI_BAR_WIDTH")
 
-  printf "  ${C_DIM}%3d${C_RESET}  %-32s  %10s  %s  %s ${rc}${C_BOLD}%-8s${C_RESET}\n" \
+  printf "  ${C_DIM}%3d${C_RESET}  %-${UI_NAME_WIDTH}s  %10s  %s  %s ${rc}${C_BOLD}%-8s${C_RESET}\n" \
     "$idx" "$name" "$size_fmt" "$bar" "$icon" "$local_tag"
   ((idx++))
 done
@@ -3314,12 +3051,11 @@ if [[ "$REPORT_MODE" == true ]]; then
       else
         local_size=$(fmt "${T_SIZES[$ci]}")
       fi
-      name="${T_NAMES[$ci]}"
-      (( ${#name} > 36 )) && name="${name:0:33}..."
+      name=$(truncate_middle "${T_NAMES[$ci]}" "$UI_NAME_WIDTH")
       local_bar=$(draw_bar "${T_SIZES[$ci]}" "$cat_max_kb" "$UI_BAR_WIDTH")
       connector=""
       if (( ci_idx == last_idx )); then connector="└──"; else connector="├──"; fi
-      printf "  ${DIM}%s${NC} %-36s %10s  %s  %s ${local_rc}${BOLD}%s${NC}\n" \
+      printf "  ${DIM}%s${NC} %-${UI_NAME_WIDTH}s %10s  %s  %s ${local_rc}${BOLD}%s${NC}\n" \
         "$connector" "$name" "$local_size" "$local_bar" "$local_icon" "$local_tag"
       ((ci_idx++))
     done
@@ -3332,20 +3068,23 @@ if [[ "$REPORT_MODE" == true ]]; then
     "$(fmt "$grand_total")" "${#T_NAMES[@]}" "${#report_cats[@]}"
   echo ""
 
-  # Untouchable section in report
+  # Untouchable section in report — all items inside the box
   if (( ${#U_NAMES[@]} > 0 )); then
-    draw_box "🔒 Untouchable — Apple's territory" "$C_ACCENT" 60 \
-      "Total: $(fmt "$U_TOTAL") — none of this can be safely removed" \
-      ""
+    local _ubox_lines=()
+    _ubox_lines+=("Total: $(fmt "$U_TOTAL") — none of this can be safely removed")
+    _ubox_lines+=("")
     for (( ui=0; ui<${#U_NAMES[@]}; ui++ )); do
       if (( U_SIZES[ui] > 0 )); then
-        printf "  ${C_ACCENT}🔒${C_RESET} %-38s %10s\n" "${U_NAMES[$ui]}" "$(fmt "${U_SIZES[$ui]}")"
+        _ubox_lines+=("$(printf '🔒 %-38s %10s' "${U_NAMES[$ui]}" "$(fmt "${U_SIZES[$ui]}")")")
+      elif (( U_SIZES[ui] == -1 )); then
+        _ubox_lines+=("$(printf '🔒 %-38s %10s' "${U_NAMES[$ui]}" "—")")
       fi
     done
-    echo ""
-    printf "  ${C_DIM}These exist because of decisions Apple made about how${C_RESET}\n"
-    printf "  ${C_DIM}macOS works. diskdoc shows them for transparency, but${C_RESET}\n"
-    printf "  ${C_DIM}will never delete them. Run with --scan for details.${C_RESET}\n"
+    _ubox_lines+=("")
+    _ubox_lines+=("These exist because of decisions Apple made about how")
+    _ubox_lines+=("macOS works. diskdoc shows them for transparency, but")
+    _ubox_lines+=("will never delete them. Run with --scan for details.")
+    draw_box "🔒 Untouchable — Apple's territory" "$C_ACCENT" 60 "${_ubox_lines[@]}"
     echo ""
   fi
 
@@ -3366,8 +3105,7 @@ if [[ "$DRY_RUN" == true ]]; then
     i="${entry#*|}"
     method="${T_METHODS[$i]}"
     path="${T_PATHS[$i]}"
-    name="${T_NAMES[$i]}"
-    (( ${#name} > 36 )) && name="${name:0:33}..."
+    name=$(truncate_middle "${T_NAMES[$i]}" "$UI_NAME_WIDTH")
 
     cmd=""
     case "$method" in
@@ -3396,7 +3134,7 @@ if [[ "$DRY_RUN" == true ]]; then
       swift-purge)    cmd="swift package purge-cache" ;;
     esac
 
-    printf "  ${DIM}[%2d]${NC} %-36s  ${DIM}%s${NC}\n" "$idx" "$name" "$cmd"
+    printf "  ${DIM}[%2d]${NC} %-${UI_NAME_WIDTH}s  ${DIM}%s${NC}\n" "$idx" "$name" "$cmd"
     ((idx++))
   done
 
@@ -3456,115 +3194,128 @@ echo ""
 
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 
+do_cleanup() {
+  local _cleanup_err=""
+  local _first_err=""
+  local selector_idx=0
+
+  for entry in "${SORTED[@]}"; do
+    i="${entry#*|}"
+
+    if [[ "${SELECTED[$selector_idx]}" != "1" ]]; then
+      ((selector_idx++))
+      continue
+    fi
+    ((selector_idx++))
+
+    local method="${T_METHODS[$i]}"
+    local path="${T_PATHS[$i]}"
+    local name
+    name=$(truncate_middle "${T_NAMES[$i]}" "$UI_NAME_WIDTH")
+
+    printf "  ${DIM}[%d/%d]${NC} %-${UI_NAME_WIDTH}s " "$((ITEMS_CLEANED + ITEMS_FAILED + 1))" "${#SORTED[@]}" "$name"
+
+    ok=false
+    _cleanup_err=""
+    case "$method" in
+      rm)
+        _cleanup_err=$(rm -rf "$path" 2>&1) && ok=true
+        ;;
+      rm-sudo)
+        _cleanup_err=$(sudo rm -rf "$path" 2>&1) && ok=true
+        ;;
+      find-nm)
+        find "$path" -name "node_modules" -maxdepth 4 -type d -exec rm -rf {} + 2>/dev/null
+        ok=true
+        ;;
+      find-rust)
+        while IFS= read -r cargo_file; do
+          target_dir="$(dirname "$cargo_file")/target"
+          [[ -d "$target_dir" ]] && rm -rf "$target_dir" 2>/dev/null
+        done < <(find "$path" -name "Cargo.toml" -maxdepth 5 2>/dev/null)
+        ok=true
+        ;;
+      npm-cache)
+        npm cache clean --force &>/dev/null && ok=true
+        ;;
+      pnpm-prune)
+        pnpm store prune &>/dev/null && ok=true
+        ;;
+      brew-cleanup)
+        brew cleanup --prune=all -q &>/dev/null && ok=true
+        ;;
+      tm-thin)
+        sudo tmutil thinlocalsnapshots / 99999999999 &>/dev/null && ok=true
+        ;;
+      xcrun-sim)
+        xcrun simctl delete unavailable &>/dev/null && ok=true
+        ;;
+      qlmanage-reset)
+        qlmanage -r cache &>/dev/null && rm -rf "$path" 2>/dev/null && ok=true
+        ;;
+      find-artifact)
+        artifact_name="${name%% (*}"
+        find "$path" -name "$artifact_name" -maxdepth 5 -type d -exec rm -rf {} + 2>/dev/null
+        ok=true
+        ;;
+      docker-prune)
+        docker system prune -a --volumes -f &>/dev/null && ok=true
+        ;;
+      spotlight-rebuild)
+        sudo mdutil -E / &>/dev/null && ok=true
+        ;;
+      caskroom-clean)
+        find "$path" -type f \( -name '*.dmg' -o -name '*.pkg' \) -delete 2>/dev/null && ok=true
+        ;;
+      conda-clean)
+        has_cmd conda && conda clean --all -y &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+        ;;
+      bazel-clean)
+        has_cmd bazel && bazel clean --expunge &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+        ;;
+      ghcup-gc)
+        has_cmd ghcup && ghcup gc &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+        ;;
+      opam-clean)
+        has_cmd opam && opam clean -y &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+        ;;
+      bun-cache-rm)
+        has_cmd bun && bun pm cache rm &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+        ;;
+      julia-gc)
+        has_cmd julia && julia -e 'using Pkg; Pkg.gc()' &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+        ;;
+      poetry-clean)
+        has_cmd poetry && poetry cache clear . --all -n &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+        ;;
+      conan-clean)
+        has_cmd conan && conan cache clean "*" &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+        ;;
+      swift-purge)
+        has_cmd swift && swift package purge-cache &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+        ;;
+    esac
+
+    if $ok; then
+      echo -e "${GREEN}done${NC}"
+      ((ITEMS_CLEANED++))
+    else
+      if [[ -n "$_cleanup_err" ]]; then
+        _first_err=$(echo "$_cleanup_err" | head -1 | cut -c1-60)
+        echo -e "${RED}failed${NC} — ${DIM}${_first_err}${NC}"
+      else
+        echo -e "${RED}failed${NC}"
+      fi
+      ((ITEMS_FAILED++))
+    fi
+  done
+}
+
 ITEMS_CLEANED=0
 ITEMS_FAILED=0
 START_TIME=$(date +%s)
 
-selector_idx=0
-for entry in "${SORTED[@]}"; do
-  i="${entry#*|}"
-
-  if [[ "${SELECTED[$selector_idx]}" != "1" ]]; then
-    ((selector_idx++))
-    continue
-  fi
-  ((selector_idx++))
-
-  method="${T_METHODS[$i]}"
-  path="${T_PATHS[$i]}"
-  name="${T_NAMES[$i]}"
-  (( ${#name} > 42 )) && name="${name:0:39}..."
-
-  printf "  ${DIM}[%d/%d]${NC} %-42s " "$((ITEMS_CLEANED + ITEMS_FAILED + 1))" "${#SORTED[@]}" "$name"
-
-  ok=false
-  case "$method" in
-    rm)
-      rm -rf "$path" 2>/dev/null && ok=true
-      ;;
-    rm-sudo)
-      sudo rm -rf "$path" 2>/dev/null && ok=true
-      ;;
-    find-nm)
-      find "$path" -name "node_modules" -maxdepth 4 -type d -exec rm -rf {} + 2>/dev/null
-      ok=true
-      ;;
-    find-rust)
-      while IFS= read -r cargo_file; do
-        target_dir="$(dirname "$cargo_file")/target"
-        [[ -d "$target_dir" ]] && rm -rf "$target_dir" 2>/dev/null
-      done < <(find "$path" -name "Cargo.toml" -maxdepth 5 2>/dev/null)
-      ok=true
-      ;;
-    npm-cache)
-      npm cache clean --force &>/dev/null && ok=true
-      ;;
-    pnpm-prune)
-      pnpm store prune &>/dev/null && ok=true
-      ;;
-    brew-cleanup)
-      brew cleanup --prune=all -q &>/dev/null && ok=true
-      ;;
-    tm-thin)
-      sudo tmutil thinlocalsnapshots / 99999999999 &>/dev/null && ok=true
-      ;;
-    xcrun-sim)
-      xcrun simctl delete unavailable &>/dev/null && ok=true
-      ;;
-    qlmanage-reset)
-      qlmanage -r cache &>/dev/null && rm -rf "$path" 2>/dev/null && ok=true
-      ;;
-    find-artifact)
-      artifact_name="${name%% (*}"
-      find "$path" -name "$artifact_name" -maxdepth 5 -type d -exec rm -rf {} + 2>/dev/null
-      ok=true
-      ;;
-    docker-prune)
-      docker system prune -a --volumes -f &>/dev/null && ok=true
-      ;;
-    spotlight-rebuild)
-      sudo mdutil -E / &>/dev/null && ok=true
-      ;;
-    caskroom-clean)
-      find "$path" -type f \( -name '*.dmg' -o -name '*.pkg' \) -delete 2>/dev/null && ok=true
-      ;;
-    conda-clean)
-      has_cmd conda && conda clean --all -y &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
-      ;;
-    bazel-clean)
-      has_cmd bazel && bazel clean --expunge &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
-      ;;
-    ghcup-gc)
-      has_cmd ghcup && ghcup gc &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
-      ;;
-    opam-clean)
-      has_cmd opam && opam clean -y &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
-      ;;
-    bun-cache-rm)
-      has_cmd bun && bun pm cache rm &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
-      ;;
-    julia-gc)
-      has_cmd julia && julia -e 'using Pkg; Pkg.gc()' &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
-      ;;
-    poetry-clean)
-      has_cmd poetry && poetry cache clear . --all -n &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
-      ;;
-    conan-clean)
-      has_cmd conan && conan cache clean "*" &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
-      ;;
-    swift-purge)
-      has_cmd swift && swift package purge-cache &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
-      ;;
-  esac
-
-  if $ok; then
-    echo -e "${GREEN}done${NC}"
-    ((ITEMS_CLEANED++))
-  else
-    echo -e "${RED}failed${NC}"
-    ((ITEMS_FAILED++))
-  fi
-done
+do_cleanup
 
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
