@@ -1776,7 +1776,15 @@ if matches_profile "Personal" || [[ "$PROFILE" == "all" ]]; then
 
   scan_target "Mail Downloads"        "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads" "Personal" "PERSONAL" "rm"
   scan_target "Messages Attachments"  "$HOME/Library/Messages/Attachments"                                  "Personal" "PERSONAL" "rm"
-  scan_target "Messages Database"     "$HOME/Library/Messages"                                              "Personal" "PERSONAL" "rm"
+  if ! scan_target "Messages Database"     "$HOME/Library/Messages"                                              "Personal" "PERSONAL" "rm"; then
+    if [[ -d "$HOME/Library/Messages" ]]; then
+      local _msg_kb
+      _msg_kb=$(du -sk "$HOME/Library/Messages" 2>/dev/null | awk '{print $1}')
+      if [[ -z "$_msg_kb" || "$_msg_kb" == "0" ]]; then
+        log "  │  ${C_WARNING}⚠${C_RESET}  ${C_DIM}Messages exists but unreadable (TCC). Grant Full Disk Access.${C_RESET}\n"
+      fi
+    fi
+  fi
 
   # iCloud Drive local cache
   scan_target "iCloud Drive (local)"  "$HOME/Library/Mobile Documents"                                      "Personal" "PERSONAL" "rm"
@@ -2189,6 +2197,7 @@ if matches_profile "Personal" || matches_profile "System" || [[ "$PROFILE" == "a
   scan_target "Mail Downloads" "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads" "Mail" "PERSONAL" "rm"
 
   # Versioned Mail databases — detect active vs obsolete
+  local _mail_tcc_blocked=false
   for v in V6 V7 V8 V9 V10; do
     local mail_dir="$HOME/Library/Mail/$v"
     [[ -d "$mail_dir" ]] || continue
@@ -2200,8 +2209,23 @@ if matches_profile "Personal" || matches_profile "System" || [[ "$PROFILE" == "a
     else
       mail_label="Mail $v (obsolete)"
     fi
-    scan_target "$mail_label" "$mail_dir" "Mail" "$mail_risk" "rm"
+    if ! scan_target "$mail_label" "$mail_dir" "Mail" "$mail_risk" "rm"; then
+      # Path exists (passed -d check above) but du returned 0 — likely TCC
+      local _mail_du_kb
+      _mail_du_kb=$(du -sk "$mail_dir" 2>/dev/null | awk '{print $1}')
+      _mail_du_kb=${_mail_du_kb:-0}
+      if (( _mail_du_kb == 0 )); then
+        _mail_tcc_blocked=true
+      fi
+    fi
   done
+
+  if [[ "$_mail_tcc_blocked" == true ]]; then
+    log "  │\n"
+    log "  │  ${C_WARNING}⚠${C_RESET}  Mail folder exists but cannot be read (TCC protection).\n"
+    log "  │     Grant Full Disk Access to Terminal in:\n"
+    log "  │     ${C_DIM}System Settings → Privacy & Security → Full Disk Access${C_RESET}\n"
+  fi
 
   mail_count=0; mail_kb=0
   for ((i=mail_start; i<${#T_CATS[@]}; i++)); do
