@@ -401,19 +401,18 @@ scan_untouchable_target() {
   local name="$1" path="$2" desc="$3"
   local kb=0
 
-  if [[ -e "$path" ]]; then
-    if sudo test -d "$path" 2>/dev/null; then
-      kb=$(sudo du -sk "$path" 2>/dev/null | awk '{print $1}')
-    elif sudo test -f "$path" 2>/dev/null; then
-      kb=$(sudo du -sk "$path" 2>/dev/null | awk '{print $1}')
-    fi
+  # Use sudo test — many untouchable paths (sleepimage, oah, etc.) are
+  # owned by root and invisible to non-root [[ -e ]]
+  if sudo test -e "$path" 2>/dev/null; then
+    kb=$(sudo du -sk "$path" 2>/dev/null | awk '{print $1}')
+    kb=${kb:-0}
   fi
 
   U_NAMES+=("$name")
   U_PATHS+=("$path")
-  U_SIZES+=("$kb")
+  U_SIZES+=("${kb:-0}")
   U_DESCS+=("$desc")
-  U_TOTAL=$((U_TOTAL + kb))
+  U_TOTAL=$((U_TOTAL + ${kb:-0}))
 }
 
 # ── Scan helpers ─────────────────────────────────────────────────────────────
@@ -2869,6 +2868,8 @@ fi
 # ── Untouchable scanners (E1-E6) — NEVER deletable, report only ─────────────
 
 cat_header "Untouchable" "$C_ACCENT"
+log "  │  ${C_WARNING}⚠${C_RESET}  ${C_DIM}Untouchable scan needs sudo to read sleepimage, Rosetta cache,${C_RESET}\n"
+log "  │     ${C_DIM}and swap files (all owned by system daemons).${C_RESET}\n"
 
 # E1: dyld shared cache — path varies by macOS version
 _dyld_path=""
@@ -2898,6 +2899,8 @@ if [[ -d "/private/var/vm" ]]; then
   while IFS= read -r _sf; do
     local _sfkb
     _sfkb=$(sudo du -sk "$_sf" 2>/dev/null | awk '{print $1}')
+    _sfkb=${_sfkb:-0}
+    [[ "$_sfkb" =~ ^[0-9]+$ ]] || _sfkb=0
     _swap_kb=$((_swap_kb + _sfkb))
   done < <(find /private/var/vm -name 'swapfile*' -type f 2>/dev/null)
 fi
