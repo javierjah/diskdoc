@@ -1056,6 +1056,68 @@ _interactive_select_tree() {
   declare -a _visible_rows=()
   build_visible_rows
   local cursor=0 scroll=0
+  local _sort_mode=0  # 0=Size, 1=Name, 2=Risk, 3=Category
+  local -a _sort_labels=("▼ Size" "▲ Name" "Risk" "Category")
+
+  _risk_rank() {
+    case "$1" in SAFE) echo 0 ;; REBUILD) echo 1 ;; PERSONAL) echo 2 ;; *) echo 3 ;; esac
+  }
+
+  _do_sort() {
+    local -a new_sorted=()
+    case $_sort_mode in
+      0) while IFS= read -r line; do new_sorted+=("$line"); done < \
+           <(for ((i=0; i<num; i++)); do
+             local ri="${SORTED[$i]#*|}"
+             printf "%d|%d\n" "${T_SIZES[$ri]}" "$ri"
+           done | sort -t'|' -k1 -rn)
+         ;;
+      1) while IFS= read -r line; do new_sorted+=("$line"); done < \
+           <(for ((i=0; i<num; i++)); do
+             local ri="${SORTED[$i]#*|}"
+             printf "%s|%d\n" "${T_NAMES[$ri]}" "$ri"
+           done | sort -t'|' -k1 -f)
+         ;;
+      2) while IFS= read -r line; do new_sorted+=("$line"); done < \
+           <(for ((i=0; i<num; i++)); do
+             local ri="${SORTED[$i]#*|}"
+             printf "%d|%d\n" "$(_risk_rank "${T_RISKS[$ri]}")" "$ri"
+           done | sort -t'|' -k1 -n)
+         ;;
+      3) while IFS= read -r line; do new_sorted+=("$line"); done < \
+           <(for ((i=0; i<num; i++)); do
+             local ri="${SORTED[$i]#*|}"
+             printf "%s|%d\n" "${T_CATS[$ri]}" "$ri"
+           done | sort -t'|' -k1 -f)
+         ;;
+    esac
+    for ((i=0; i<${#new_sorted[@]}; i++)); do
+      local ri="${new_sorted[$i]#*|}"
+      SORTED[$i]="${T_SIZES[$ri]}|$ri"
+    done
+  }
+
+  _rebuild_tree() {
+    _tree_cat_order=()
+    for k in "${!_tree_cat_items[@]}"; do unset "_tree_cat_items[$k]"; done
+    for k in "${!_tree_cat_kb[@]}"; do unset "_tree_cat_kb[$k]"; done
+    for k in "${!_tree_cat_max[@]}"; do unset "_tree_cat_max[$k]"; done
+    for ((si=0; si<num; si++)); do
+      local real_idx="${SORTED[$si]#*|}"
+      local cat="${T_CATS[$real_idx]}"
+      if [[ -z "${_tree_cat_items[$cat]+x}" ]]; then
+        _tree_cat_order+=("$cat")
+        _tree_cat_items[$cat]=""
+        _tree_cat_kb[$cat]=0
+        _tree_cat_max[$cat]=0
+        [[ -z "${_tree_cat_collapsed[$cat]+x}" ]] && _tree_cat_collapsed[$cat]=0
+      fi
+      [[ -n "${_tree_cat_items[$cat]}" ]] && _tree_cat_items[$cat]+=","
+      _tree_cat_items[$cat]+="$si"
+      _tree_cat_kb[$cat]=$(( ${_tree_cat_kb[$cat]} + T_SIZES[$real_idx] ))
+      (( T_SIZES[$real_idx] > _tree_cat_max[$cat] )) && _tree_cat_max[$cat]=${T_SIZES[$real_idx]}
+    done
+  }
 
   # TUI setup
   detect_term_size
@@ -1167,7 +1229,7 @@ _interactive_select_tree() {
     # Status bar
     printf "\033[K\n"
     printf "  ${C_BOLD}Selected: %d/%d items — %s${C_RESET}\033[K\n" "$sel_count" "$num" "$(fmt $sel_kb)"
-    printf "  ${C_DIM}↑↓ move  ␣ toggle  →/← expand/collapse  A all  N none  ⏎ confirm  q quit${C_RESET}\033[K\n"
+    printf "  ${C_DIM}↑↓ move  ␣ toggle  →/← expand/collapse  A all  N none  s Sort: %s  / Search  ⏎ confirm  q quit${C_RESET}\033[K\n" "${_sort_labels[$_sort_mode]}"
     drawn=$((drawn + 3))
 
     # Detail panel for current item (only if cursor is on an item)
@@ -1251,6 +1313,64 @@ _interactive_select_tree() {
         ;;
       'a'|'A') for ((i=0; i<num; i++)); do SELECTED[$i]=1; done ;;
       'n'|'N') for ((i=0; i<num; i++)); do SELECTED[$i]=0; done ;;
+      's'|'S')
+        _sort_mode=$(( (_sort_mode + 1) % 4 ))
+        _do_sort
+        _rebuild_tree
+        build_visible_rows
+        cursor=0; scroll=0
+        ;;
+      '/')
+        # Search filter — read substring, filter visible items
+        printf "\r\033[K  ${C_BOLD}Filter:${C_RESET} "
+        local filter_str=""
+        while true; do
+          IFS= read -rsn1 fk
+          case "$fk" in
+            ''|$'\n') break ;;
+            $'\x1b') filter_str=""; break ;;
+            $'\x7f'|$'\b')
+              if [[ -n "$filter_str" ]]; then
+                filter_str="${filter_str%?}"
+                printf "\r\033[K  ${C_BOLD}Filter:${C_RESET} %s" "$filter_str"
+              fi
+              ;;
+            *)
+              filter_str+="$fk"
+              printf "%s" "$fk"
+              ;;
+          esac
+        done
+        if [[ -n "$filter_str" ]]; then
+          _visible_rows=()
+          local lc_filter
+          lc_filter=$(printf '%s' "$filter_str" | tr '[:upper:]' '[:lower:]')
+          for cat in "${_tree_cat_order[@]}"; do
+            local has_match=false
+            IFS=',' read -ra items <<< "${_tree_cat_items[$cat]}"
+            local matching_items=()
+            for si in "${items[@]}"; do
+              local ri="${SORTED[$si]#*|}"
+              local lc_name
+              lc_name=$(printf '%s' "${T_NAMES[$ri]}" | tr '[:upper:]' '[:lower:]')
+              if [[ "$lc_name" == *"$lc_filter"* ]]; then
+                has_match=true
+                matching_items+=("$si")
+              fi
+            done
+            if $has_match; then
+              _visible_rows+=("cat:$cat")
+              _tree_cat_collapsed[$cat]=0
+              for si in "${matching_items[@]}"; do
+                _visible_rows+=("item:$si")
+              done
+            fi
+          done
+          cursor=0; scroll=0
+        else
+          build_visible_rows
+        fi
+        ;;
       ''|$'\n') break ;;
       'q'|'Q')
         tput cnorm 2>/dev/null
