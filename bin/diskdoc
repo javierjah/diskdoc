@@ -64,6 +64,9 @@ disable_colors() {
 # Disable colors if not a terminal (piped output)
 [[ ! -t 1 ]] && disable_colors
 
+# ── UI dimensions — single source of truth ──────────────────────────────────
+readonly UI_BAR_WIDTH=10
+
 # ── Flags ────────────────────────────────────────────────────────────────────
 AUTO_MODE=false
 SCAN_ONLY=false
@@ -921,7 +924,7 @@ _interactive_select_flat() {
       local icon
       icon=$(risk_icon "$tag")
       local bar
-      bar=$(draw_bar "${T_SIZES[$ri]}" "$max_kb" 8)
+      bar=$(draw_bar "${T_SIZES[$ri]}" "$max_kb" "$UI_BAR_WIDTH")
 
       local check="[ ]"
       [[ "${SELECTED[$si]}" == "1" ]] && check="[x]"
@@ -1128,7 +1131,7 @@ _interactive_select_tree() {
         icon=$(risk_icon "$tag")
         local cat="${T_CATS[$ri]}"
         local bar
-        bar=$(draw_bar "${T_SIZES[$ri]}" "${_tree_cat_max[$cat]}" 8)
+        bar=$(draw_bar "${T_SIZES[$ri]}" "${_tree_cat_max[$cat]}" "$UI_BAR_WIDTH")
 
         local check="[ ]"
         [[ "${SELECTED[$si]}" == "1" ]] && check="[x]"
@@ -3083,7 +3086,7 @@ for entry in "${SORTED[@]}"; do
   name="${T_NAMES[$i]}"
   (( ${#name} > 32 )) && name="${name:0:29}..."
 
-  bar=$(draw_bar "${T_SIZES[$i]}" "$TABLE_MAX_KB" 10)
+  bar=$(draw_bar "${T_SIZES[$i]}" "$TABLE_MAX_KB" "$UI_BAR_WIDTH")
 
   printf "  ${C_DIM}%3d${C_RESET}  %-32s  %10s  %s  %s ${rc}${C_BOLD}%-8s${C_RESET}\n" \
     "$idx" "$name" "$size_fmt" "$bar" "$icon" "$local_tag"
@@ -3145,7 +3148,7 @@ if [[ "$REPORT_MODE" == true ]]; then
       fi
       name="${T_NAMES[$ci]}"
       (( ${#name} > 36 )) && name="${name:0:33}..."
-      local_bar=$(draw_bar "${T_SIZES[$ci]}" "$cat_max_kb" 10)
+      local_bar=$(draw_bar "${T_SIZES[$ci]}" "$cat_max_kb" "$UI_BAR_WIDTH")
       connector=""
       if (( ci_idx == last_idx )); then connector="└──"; else connector="├──"; fi
       printf "  ${DIM}%s${NC} %-36s %10s  %s  %s ${local_rc}${BOLD}%s${NC}\n" \
