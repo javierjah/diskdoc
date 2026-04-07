@@ -1030,6 +1030,14 @@ _interactive_select_tree() {
     (( T_SIZES[$real_idx] > _tree_cat_max[$cat] )) && _tree_cat_max[$cat]=${T_SIZES[$real_idx]}
   done
 
+  # Collapse categories with >8 items by default; Untouchable always collapsed
+  for cat in "${_tree_cat_order[@]}"; do
+    IFS=',' read -ra _tmp_items <<< "${_tree_cat_items[$cat]}"
+    if (( ${#_tmp_items[@]} > 8 )) || [[ "$cat" == "Untouchable" ]]; then
+      _tree_cat_collapsed[$cat]=1
+    fi
+  done
+
   # Build flat visible-row list
   # Each row is "cat:CAT_NAME" or "item:SORTED_IDX"
   build_visible_rows() {
