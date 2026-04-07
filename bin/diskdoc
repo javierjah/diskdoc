@@ -203,10 +203,12 @@ while [[ $# -gt 0 ]]; do
       unset 'U_PATHS[${#U_PATHS[@]}-1]'
       unset 'U_SIZES[${#U_SIZES[@]}-1]'
       unset 'U_DESCS[${#U_DESCS[@]}-1]'
-      # Test 3: Auto mode skips UNTOUCHABLE risk
+      # Test 3: Auto mode only allows SAFE (whitelist approach)
       echo "[3] Checking auto mode guard..."
-      if grep -q 'UNTOUCHABLE' <<< "$(grep 'T_RISKS.*PERSONAL.*UNTOUCHABLE\|T_RISKS.*UNTOUCHABLE' bin/diskdoc 2>/dev/null || echo 'found')"; then
-        echo "  PASS: Auto mode guards against UNTOUCHABLE"
+      if grep -q 'SAFE.*SELECTED.*=1\|== "SAFE".*SELECTED' bin/diskdoc 2>/dev/null; then
+        echo "  PASS: Auto mode whitelists SAFE only"
+      elif grep -q '"SAFE"' <<< "$(sed -n '/AUTO_MODE.*true/,/^fi$/p' bin/diskdoc 2>/dev/null | grep 'T_RISKS')"; then
+        echo "  PASS: Auto mode checks for SAFE risk"
       else
         echo "  WARN: Could not verify auto mode guard (check manually)"
       fi
@@ -342,12 +344,24 @@ log() { [[ "$JSON_MODE" == true ]] && return; printf "$@"; }
 
 get_kb() {
   local p="$1"
-  [[ -d "$p" ]] && du -sk "$p" 2>/dev/null | awk '{print $1}' || echo 0
+  if [[ -d "$p" ]]; then
+    local val
+    val=$(du -sk "$p" 2>/dev/null | awk '{print $1}')
+    echo "${val:-0}"
+  else
+    echo 0
+  fi
 }
 
 get_kb_sudo() {
   local p="$1"
-  sudo test -d "$p" 2>/dev/null && sudo du -sk "$p" 2>/dev/null | awk '{print $1}' || echo 0
+  if sudo test -d "$p" 2>/dev/null; then
+    local val
+    val=$(sudo du -sk "$p" 2>/dev/null | awk '{print $1}')
+    echo "${val:-0}"
+  else
+    echo 0
+  fi
 }
 
 fmt() {
@@ -477,7 +491,7 @@ scan_vm_bundle() {
       FOUND_TOTAL=$((FOUND_TOTAL + kb))
       log "  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "$bname" "$(fmt "$kb")"
     fi
-  done < <(find "$dir" -maxdepth 1 -name "*${ext}" -type d 2>/dev/null)
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 -name "*${ext}" -type d 2>/dev/null)
 }
 
 # Scan a directory and report each subdirectory as individual item
@@ -1031,10 +1045,14 @@ _interactive_select_tree() {
 
   declare -a _visible_rows=()
   build_visible_rows
-  local cursor=0
+  local cursor=0 scroll=0
 
   # TUI setup
   detect_term_size
+  # Reserve lines for status(3) + detail(8) + scroll indicators(2) + padding(1) = 14
+  local page_size=$(( TERM_LINES > 14 ? TERM_LINES - 14 : 10 ))
+  (( page_size < 5 )) && page_size=5
+
   tput civis 2>/dev/null
   stty -echo -icanon 2>/dev/null
   trap 'tput cnorm 2>/dev/null; stty sane 2>/dev/null' EXIT INT TERM
@@ -1052,8 +1070,24 @@ _interactive_select_tree() {
       fi
     done
 
+    local total_rows=${#_visible_rows[@]}
+    # Adjust scroll window to keep cursor visible
+    (( cursor < scroll )) && scroll=$cursor
+    (( cursor >= scroll + page_size )) && scroll=$(( cursor - page_size + 1 ))
+    local end=$(( scroll + page_size ))
+    (( end > total_rows )) && end=$total_rows
+
     local drawn=0
-    for ((r=0; r<${#_visible_rows[@]}; r++)); do
+
+    # Scroll indicator top
+    if (( scroll > 0 )); then
+      printf "  ${C_DIM}  ▲ %d more above${C_RESET}\033[K\n" "$scroll"
+    else
+      printf "\033[K\n"
+    fi
+    ((drawn++))
+
+    for ((r=scroll; r<end; r++)); do
       local row="${_visible_rows[$r]}"
       local row_type="${row%%:*}"
       local row_val="${row#*:}"
@@ -1110,6 +1144,15 @@ _interactive_select_tree() {
       fi
       ((drawn++))
     done
+
+    # Scroll indicator bottom
+    local remaining=$(( total_rows - end ))
+    if (( remaining > 0 )); then
+      printf "  ${C_DIM}  ▼ %d more below${C_RESET}\033[K\n" "$remaining"
+    else
+      printf "\033[K\n"
+    fi
+    ((drawn++))
 
     # Status bar
     printf "\033[K\n"
@@ -1951,10 +1994,13 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   scan_vm_bundle "$HOME/Parallels" ".pvm" "Virtualization" "REBUILD"
   scan_vm_bundle "$HOME/Parallels" ".macvm" "Virtualization" "REBUILD"
   scan_vm_bundle "$HOME/Documents/Parallels" ".pvm" "Virtualization" "REBUILD"
+  scan_vm_bundle "$HOME/Documents/Parallels" ".macvm" "Virtualization" "REBUILD"
   scan_vm_bundle "/Users/Shared/Parallels" ".pvm" "Virtualization" "REBUILD"
+  scan_vm_bundle "/Users/Shared/Parallels" ".macvm" "Virtualization" "REBUILD"
   # App Store sandboxed Parallels
   local _prl_appstore="$HOME/Library/Group Containers/4C6364ACXT.com.parallels.desktop.appstore/Shared/Parallels"
   scan_vm_bundle "$_prl_appstore" ".pvm" "Virtualization" "REBUILD"
+  scan_vm_bundle "$_prl_appstore" ".macvm" "Virtualization" "REBUILD"
   scan_target "Parallels Prefs" "$HOME/Library/Preferences/Parallels" "Virtualization" "SAFE" "rm"
   scan_target "Parallels Support" "$HOME/Library/Application Support/Parallels" "Virtualization" "SAFE" "rm"
 
@@ -1989,7 +2035,28 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   fi
 
   # A4: Lima — each ~/.lima/<instance>/disk is a VM
-  scan_dir_items "$HOME/.lima" "Lima: " "Virtualization" "REBUILD"
+  # Skip colima subdir here — scanned separately below to avoid double-count
+  if [[ -d "$HOME/.lima" ]]; then
+    for _lima_sub in "$HOME/.lima"/*/; do
+      [[ -d "$_lima_sub" ]] || continue
+      local _lima_name
+      _lima_name=$(basename "$_lima_sub")
+      [[ "$_lima_name" == "colima"* ]] && continue
+      is_excluded "$_lima_sub" && continue
+      local _lima_kb
+      _lima_kb=$(get_kb "$_lima_sub")
+      if (( _lima_kb > MIN_SIZE_KB )); then
+        T_NAMES+=("Lima: $_lima_name")
+        T_PATHS+=("$_lima_sub")
+        T_SIZES+=("$_lima_kb")
+        T_CATS+=("Virtualization")
+        T_RISKS+=("REBUILD")
+        T_METHODS+=("rm")
+        FOUND_TOTAL=$((FOUND_TOTAL + _lima_kb))
+        log "  │  ${C_SUCCESS}✓${C_RESET}  %-44s ${C_BOLD}%10s${C_RESET}\n" "Lima: $_lima_name" "$(fmt "$_lima_kb")"
+      fi
+    done
+  fi
 
   # A4: Colima (v0.6+ uses ~/.colima, pre-v0.6 uses ~/.lima/colima)
   scan_dir_items "$HOME/.colima" "Colima: " "Virtualization" "REBUILD"
@@ -2089,11 +2156,13 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   scan_target "LR Smart Previews" "$HOME/Pictures/Lightroom/Lightroom Catalog Smart Previews.lrdata" "Creative" "SAFE" "rm"
   scan_target "LR Backups" "$HOME/Pictures/Lightroom/Backups" "Creative" "REBUILD" "rm"
 
-  # A8: DaVinci Resolve
-  for resolve_dir in "$HOME/Movies/DaVinci Resolve/"*/; do
-    [[ -d "$resolve_dir" ]] || continue
-    scan_target "Resolve: $(basename "$resolve_dir")" "$resolve_dir" "Creative" "SAFE" "rm"
-  done
+  # A8: DaVinci Resolve — scan CacheClip dirs specifically (render cache)
+  while IFS= read -r _resolve_cache; do
+    [[ -d "$_resolve_cache" ]] || continue
+    local _resolve_parent
+    _resolve_parent=$(dirname "$_resolve_cache")
+    scan_target "Resolve CacheClip ($(basename "$_resolve_parent"))" "$_resolve_cache" "Creative" "SAFE" "rm"
+  done < <(find "$HOME/Movies/DaVinci Resolve" -name "CacheClip" -type d 2>/dev/null)
   scan_target "Resolve Support" "$HOME/Library/Application Support/Blackmagic Design/DaVinci Resolve" "Creative" "SAFE" "rm"
 
   cr_count=0; cr_kb=0
@@ -2274,6 +2343,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   scan_target "Safari Container Cache" "$HOME/Library/Containers/com.apple.Safari/Data/Library/Caches" "Browser" "SAFE" "rm"
   scan_target "Safari Favicon Cache" "$HOME/Library/Safari/Favicon Cache" "Browser" "SAFE" "rm"
   scan_target "Safari Touch Icons" "$HOME/Library/Safari/Touch Icons Cache" "Browser" "SAFE" "rm"
+  scan_target "Safari Tabs DB" "$HOME/Library/Containers/com.apple.Safari/SafariTabs.db" "Browser" "PERSONAL" "rm"
 
   # B4: Firefox
   for ff_profile in "$HOME/Library/Application Support/Firefox/Profiles/"*/; do
@@ -2282,6 +2352,9 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
     ff_name=$(basename "$ff_profile")
     scan_target "Firefox cache ($ff_name)" "${ff_profile}cache2/entries" "Browser" "SAFE" "rm"
     scan_target "Firefox startup ($ff_name)" "${ff_profile}startupCache" "Browser" "SAFE" "rm"
+    scan_target "Firefox datareporting ($ff_name)" "${ff_profile}datareporting" "Browser" "SAFE" "rm"
+    scan_target "Firefox crashes ($ff_name)" "${ff_profile}crashes" "Browser" "SAFE" "rm"
+    scan_target "Firefox minidumps ($ff_name)" "${ff_profile}minidumps" "Browser" "SAFE" "rm"
   done
   for ff_cache in "$HOME/Library/Caches/Firefox/Profiles/"*/; do
     [[ -d "$ff_cache" ]] || continue
@@ -2337,7 +2410,7 @@ if matches_profile "Dev Tools" || matches_profile "App" || [[ "$PROFILE" == "all
     [[ -d "$conda_dir" ]] || continue
     local cname
     cname=$(basename "$conda_dir")
-    scan_target "$cname pkgs (cache)" "${conda_dir}/pkgs" "Dev Tools" "SAFE" "rm"
+    scan_target "$cname pkgs (cache)" "${conda_dir}/pkgs" "Dev Tools" "SAFE" "conda-clean"
     scan_dir_items "${conda_dir}/envs" "$cname env: " "Dev Tools" "REBUILD"
   done
 fi
@@ -2347,6 +2420,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   scan_target "Dropbox Cache" "$HOME/Dropbox/.dropbox.cache" "App" "SAFE" "rm"
   scan_target "Dropbox File Clones" "$HOME/Library/Group Containers/G7HH3F8CAK.com.getdropbox.dropbox.sync/file_clones" "App" "SAFE" "rm"
   scan_target "OneDrive Suite" "$HOME/Library/Group Containers/UBF8T346G9.OneDriveStandaloneSuite" "App" "SAFE" "rm"
+  scan_target "OneDrive Office" "$HOME/Library/Group Containers/UBF8T346G9.Office" "App" "SAFE" "rm"
 
   # B7: Signal
   scan_target "Signal Attachments" "$HOME/Library/Application Support/Signal/attachments.noindex" "App" "PERSONAL" "rm"
@@ -2365,6 +2439,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   # B11: Steam
   scan_target "Steam Downloads" "$HOME/Library/Application Support/Steam/steamapps/downloading" "App" "SAFE" "rm"
   scan_target "Steam Shader Cache" "$HOME/Library/Application Support/Steam/steamapps/shadercache" "App" "SAFE" "rm"
+  scan_target "Steam Games" "$HOME/Library/Application Support/Steam/steamapps/common" "App" "REBUILD" "rm"
   scan_target "Steam Workshop" "$HOME/Library/Application Support/Steam/steamapps/workshop" "App" "REBUILD" "rm"
 fi
 
@@ -2377,9 +2452,10 @@ if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
   # B13: Unreal Engine
   scan_target "Unreal Engine" "$HOME/Library/Application Support/Epic/UnrealEngine" "Dev Tools" "REBUILD" "rm"
   scan_target "Unreal DerivedData" "$HOME/Library/Application Support/Epic/DerivedDataCache" "Dev Tools" "SAFE" "rm"
+  scan_target "Unreal VaultCache" "/Users/Shared/Epic Games/Launcher/VaultCache" "Dev Tools" "SAFE" "rm"
 
   # B14: Bazel
-  scan_target "Bazel cache (new)" "$HOME/.cache/bazel" "Dev Tools" "SAFE" "rm"
+  scan_target "Bazel cache (new)" "$HOME/.cache/bazel" "Dev Tools" "SAFE" "bazel-clean"
   scan_target "Bazel cache (legacy)" "/private/var/tmp/_bazel_${USER}" "Dev Tools" "SAFE" "rm-sudo"
 fi
 
@@ -2389,6 +2465,10 @@ if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
 
   # B17: Saved Application State
   scan_target "Saved App State" "$HOME/Library/Saved Application State" "System" "SAFE" "rm"
+  # macOS 15+ moved to Daemon Containers under TCC
+  if (( MACOS_MAJOR >= 15 )); then
+    scan_target "Daemon Containers" "$HOME/Library/Daemon Containers" "System" "SAFE" "rm"
+  fi
 fi
 
 if has_cmd brew && (matches_profile "Pkg Manager" || [[ "$PROFILE" == "all" ]]); then
@@ -2423,17 +2503,18 @@ if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
   le_start=${#T_NAMES[@]}
 
   # C1: Julia
-  scan_target "Julia artifacts" "$HOME/.julia/artifacts" "Dev Tools" "SAFE" "rm"
-  scan_target "Julia packages" "$HOME/.julia/packages" "Dev Tools" "SAFE" "rm"
-  scan_target "Julia compiled" "$HOME/.julia/compiled" "Dev Tools" "SAFE" "rm"
+  scan_target "Julia artifacts" "$HOME/.julia/artifacts" "Dev Tools" "SAFE" "julia-gc"
+  scan_target "Julia packages" "$HOME/.julia/packages" "Dev Tools" "SAFE" "julia-gc"
+  scan_target "Julia compiled" "$HOME/.julia/compiled" "Dev Tools" "SAFE" "julia-gc"
+  scan_target "Julia registries" "$HOME/.julia/registries" "Dev Tools" "SAFE" "julia-gc"
 
   # C1: Haskell
   scan_target "Stack" "$HOME/.stack" "Dev Tools" "SAFE" "rm"
   scan_target "Cabal" "$HOME/.cabal" "Dev Tools" "SAFE" "rm"
-  scan_target "GHCup" "$HOME/.ghcup" "Dev Tools" "SAFE" "rm"
+  scan_target "GHCup" "$HOME/.ghcup" "Dev Tools" "SAFE" "ghcup-gc"
 
   # C1: OCaml, Perl, R, Elixir, Nim, Zig, Bun, Deno
-  scan_target "opam" "$HOME/.opam" "Dev Tools" "SAFE" "rm"
+  scan_target "opam" "$HOME/.opam" "Dev Tools" "SAFE" "opam-clean"
   scan_target "CPAN" "$HOME/.cpan" "Dev Tools" "SAFE" "rm"
   scan_target "cpanm" "$HOME/.cpanm" "Dev Tools" "SAFE" "rm"
   scan_target "mix (Elixir)" "$HOME/.mix" "Dev Tools" "SAFE" "rm"
@@ -2441,8 +2522,14 @@ if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
   scan_target "rebar3" "$HOME/.cache/rebar3" "Dev Tools" "SAFE" "rm"
   scan_target "nimble" "$HOME/.nimble" "Dev Tools" "SAFE" "rm"
   scan_target "zig cache" "$HOME/.cache/zig" "Dev Tools" "SAFE" "rm"
-  scan_target "Bun cache" "$HOME/.bun/install/cache" "Dev Tools" "SAFE" "rm"
+  scan_target "Bun cache" "$HOME/.bun/install/cache" "Dev Tools" "SAFE" "bun-cache-rm"
   scan_target "Deno cache" "$HOME/Library/Caches/deno" "Dev Tools" "SAFE" "rm"
+  scan_target "Deno bin" "$HOME/.deno/bin" "Dev Tools" "REBUILD" "rm"
+  # C1: R
+  for r_lib in "$HOME/Library/R/"*; do
+    [[ -d "$r_lib" ]] || continue
+    scan_target "R library ($(basename "$r_lib"))" "$r_lib" "Dev Tools" "REBUILD" "rm"
+  done
 
   le_count=0; le_kb=0
   for ((i=le_start; i<${#T_CATS[@]}; i++)); do
@@ -2481,16 +2568,21 @@ if matches_profile "Dev Tools" || [[ "$PROFILE" == "all" ]]; then
   cat_header "Build Tools" "$CYAN"
   bt_start=${#T_NAMES[@]}
 
-  scan_target "Conan (v2)" "$HOME/.conan2" "Dev Tools" "SAFE" "rm"
-  scan_target "Conan (v1)" "$HOME/.conan" "Dev Tools" "SAFE" "rm"
-  scan_target "Poetry cache" "$HOME/Library/Caches/pypoetry" "Dev Tools" "SAFE" "rm"
+  scan_target "Conan (v2)" "$HOME/.conan2" "Dev Tools" "SAFE" "conan-clean"
+  scan_target "Conan (v1)" "$HOME/.conan" "Dev Tools" "SAFE" "conan-clean"
+  scan_target "Poetry cache" "$HOME/Library/Caches/pypoetry" "Dev Tools" "SAFE" "poetry-clean"
   scan_target "pipx venvs" "$HOME/.local/pipx/venvs" "Dev Tools" "REBUILD" "rm"
   scan_target "pipenv venvs" "$HOME/.local/share/virtualenvs" "Dev Tools" "REBUILD" "rm"
   scan_target "Terraform plugins" "$HOME/.terraform.d/plugins" "Dev Tools" "SAFE" "rm"
   scan_target "Pulumi plugins" "$HOME/.pulumi/plugins" "Dev Tools" "SAFE" "rm"
-  scan_target "Swift PM cache" "$HOME/Library/Caches/org.swift.swiftpm" "Dev Tools" "SAFE" "rm"
+  scan_target "Swift PM cache" "$HOME/Library/Caches/org.swift.swiftpm" "Dev Tools" "SAFE" "swift-purge"
   scan_target "Ansible collections" "$HOME/.ansible/collections" "Dev Tools" "SAFE" "rm"
   scan_target "Ansible roles" "$HOME/.ansible/roles" "Dev Tools" "SAFE" "rm"
+  # vcpkg — scan user's vcpkg install for build artifacts
+  if [[ -n "${VCPKG_ROOT:-}" && -d "$VCPKG_ROOT" ]]; then
+    scan_target "vcpkg buildtrees" "$VCPKG_ROOT/buildtrees" "Dev Tools" "SAFE" "rm"
+    scan_target "vcpkg downloads" "$VCPKG_ROOT/downloads" "Dev Tools" "SAFE" "rm"
+  fi
 
   bt_count=0; bt_kb=0
   for ((i=bt_start; i<${#T_CATS[@]}; i++)); do
@@ -2529,6 +2621,7 @@ if matches_profile "App" || [[ "$PROFILE" == "all" ]]; then
   scan_target "Epic Games" "/Users/Shared/Epic Games" "App" "REBUILD" "rm"
   scan_target "Epic Games Support" "$HOME/Library/Application Support/Epic" "App" "SAFE" "rm"
   scan_target "Battle.net" "$HOME/Library/Application Support/Blizzard" "App" "SAFE" "rm"
+  scan_target "Battle.net Shared" "/Users/Shared/Battle.net" "App" "REBUILD" "rm"
   scan_target "Minecraft assets" "$HOME/Library/Application Support/minecraft/assets" "App" "SAFE" "rm"
   scan_target "Minecraft versions" "$HOME/Library/Application Support/minecraft/versions" "App" "SAFE" "rm"
   scan_target "OpenEmu" "$HOME/Library/Application Support/OpenEmu" "App" "PERSONAL" "rm"
@@ -2552,6 +2645,7 @@ if matches_profile "App" || matches_profile "System" || [[ "$PROFILE" == "all" ]
   scan_target "Prime Video" "$HOME/Library/Containers/Prime Video/Data/Library/com.apple.UserManagedAssets.Dnc1lR" "App" "REBUILD" "rm"
   scan_target "Apple News" "$HOME/Library/Containers/com.apple.news/Data" "App" "SAFE" "rm"
   scan_target "TV Downloads" "$HOME/Movies/TV/Media" "App" "REBUILD" "rm"
+  scan_target "Apple TV Group" "$HOME/Library/Group Containers/group.com.apple.tv/Library" "App" "REBUILD" "rm"
   scan_target "Dictionaries" "$HOME/Library/Dictionaries" "System" "SAFE" "rm"
   scan_target "Speech Voices" "/Library/Speech/Voices" "System" "REBUILD" "rm-sudo"
 fi
@@ -2614,6 +2708,9 @@ if matches_profile "System" || [[ "$PROFILE" == "all" ]]; then
   scan_target "Autosave Info" "$HOME/Library/Autosave Information" "System" "SAFE" "rm"
   scan_target "Metadata" "$HOME/Library/Metadata" "System" "SAFE" "rm"
   scan_target "Suggestions" "$HOME/Library/Suggestions" "System" "SAFE" "rm"
+  scan_target "PreferencePanes" "$HOME/Library/PreferencePanes" "System" "SAFE" "rm"
+  scan_target "Screen Savers" "$HOME/Library/Screen Savers" "System" "SAFE" "rm"
+  scan_target "QuickLook Plugins" "$HOME/Library/QuickLook" "System" "SAFE" "rm"
 fi
 
 # ── Untouchable scanners (E1-E6) — NEVER deletable, report only ─────────────
@@ -2960,6 +3057,15 @@ if [[ "$DRY_RUN" == true ]]; then
       docker-prune)   cmd="docker system prune -a --volumes -f" ;;
       spotlight-rebuild) cmd="sudo mdutil -E /" ;;
       caskroom-clean) cmd="find \"$path\" -type f \\( -name '*.dmg' -o -name '*.pkg' \\) -delete" ;;
+      conda-clean)    cmd="conda clean --all -y" ;;
+      bazel-clean)    cmd="bazel clean --expunge" ;;
+      ghcup-gc)       cmd="ghcup gc" ;;
+      opam-clean)     cmd="opam clean -y" ;;
+      bun-cache-rm)   cmd="bun pm cache rm" ;;
+      julia-gc)       cmd="julia -e 'using Pkg; Pkg.gc()'" ;;
+      poetry-clean)   cmd="poetry cache clear . --all -n" ;;
+      conan-clean)    cmd="conan cache clean \"*\"" ;;
+      swift-purge)    cmd="swift package purge-cache" ;;
     esac
 
     printf "  ${DIM}[%2d]${NC} %-36s  ${DIM}%s${NC}\n" "$idx" "$name" "$cmd"
@@ -2988,11 +3094,11 @@ if [[ "$AUTO_MODE" == true ]]; then
   personal_skipped=0
   for ((i=0; i<${#SORTED[@]}; i++)); do
     auto_idx="${SORTED[$i]#*|}"
-    if [[ "${T_RISKS[$auto_idx]}" == "PERSONAL" || "${T_RISKS[$auto_idx]}" == "UNTOUCHABLE" ]]; then
+    if [[ "${T_RISKS[$auto_idx]}" == "SAFE" ]]; then
+      SELECTED[$i]=1
+    else
       SELECTED[$i]=0
       ((personal_skipped++)) || true
-    else
-      SELECTED[$i]=1
     fi
   done
   echo -e "  ${YELLOW}Auto mode: proceeding with cleanup (SAFE items only)...${NC}"
@@ -3093,6 +3199,33 @@ for entry in "${SORTED[@]}"; do
       ;;
     caskroom-clean)
       find "$path" -type f \( -name '*.dmg' -o -name '*.pkg' \) -delete 2>/dev/null && ok=true
+      ;;
+    conda-clean)
+      has_cmd conda && conda clean --all -y &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+      ;;
+    bazel-clean)
+      has_cmd bazel && bazel clean --expunge &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+      ;;
+    ghcup-gc)
+      has_cmd ghcup && ghcup gc &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+      ;;
+    opam-clean)
+      has_cmd opam && opam clean -y &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+      ;;
+    bun-cache-rm)
+      has_cmd bun && bun pm cache rm &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+      ;;
+    julia-gc)
+      has_cmd julia && julia -e 'using Pkg; Pkg.gc()' &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+      ;;
+    poetry-clean)
+      has_cmd poetry && poetry cache clear . --all -n &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+      ;;
+    conan-clean)
+      has_cmd conan && conan cache clean "*" &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
+      ;;
+    swift-purge)
+      has_cmd swift && swift package purge-cache &>/dev/null && ok=true || { rm -rf "$path" 2>/dev/null && ok=true; }
       ;;
   esac
 
