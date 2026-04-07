@@ -1,0 +1,424 @@
+#!/usr/bin/env bash
+# diskdoc-mock — visual replica of diskdoc v3.0.2 output for VHS recording.
+# NOT functional. Self-animating frames only.
+
+set -u
+
+# ---------- ANSI ----------
+B=$'\e[1m'; D=$'\e[2m'; R=$'\e[0m'
+CY=$'\e[36m'; BL=$'\e[34m'; YL=$'\e[33m'
+GR=$'\e[32m'; RD=$'\e[31m'; MG=$'\e[35m'; GY=$'\e[90m'
+
+hide_cursor() { printf '\e[?25l'; }
+show_cursor() { printf '\e[?25h'; }
+clear_screen() { printf '\e[2J\e[H'; }
+trap show_cursor EXIT
+hide_cursor
+
+# ---------- Header ----------
+header() {
+  printf "${B}╭─ ${CY}diskdoc v3.0.2${R}${B} ──────────────────────────────────────────╮${R}\n"
+  printf "${B}│${R} macOS Disk Cleanup CLI                                    ${B}│${R}\n"
+  printf "${B}│${R} Sequoia (15.7)                                            ${B}│${R}\n"
+  printf "${B}╰──────────────────────────────────────────────────────────╯${R}\n\n"
+  printf "  ${B}Disk:${R}  460.4 GB total  ${D}|${R}  ${GR}236.7 GB free${R} (51%%)  ${D}|${R}  223.7 GB used\n\n\n"
+}
+
+# ---------- Box helper ----------
+# box "Title" "footer"  (body lines via stdin)
+box() {
+  local title="$1" footer="$2"
+  printf "  ${B}┌ %s ${R}" "$title"
+  local i len=${#title}
+  # strip ANSI for length calc — title may contain ★
+  for ((i=len+3; i<60; i++)); do printf "─"; done
+  printf "\n"
+  while IFS= read -r line; do
+    printf "  ${B}│${R}  %s\n" "$line"
+  done
+  printf "  ${B}└─── %s${R}\n\n" "$footer"
+  sleep 0.18
+}
+
+# ---------- Scan animation ----------
+scan_animation() {
+  box "${YL}★${R} APFS Snapshots" "no local snapshots" <<EOF
+EOF
+
+  box "${YL}★${R} iOS/iPadOS Backups" "nothing found" <<EOF
+${D}·${R}  ${YL}★${R} iOS/iPadOS Backups
+EOF
+
+  box "System" "1 found · ${YL}99.2 GB${R}" <<EOF
+${YL}⚠${R}  System scan needs admin access. You may be prompted for your password.
+${D}·${R}  Trash
+${GR}✓${R}  Apple Screensavers (idleassetsd)              ${YL}99.2 GB${R}
+EOF
+
+  box "Apple Intelligence / ML" "6 found · ${YL}11.0 GB${R}" <<EOF
+${D}·${R}  Siri Caches
+${GR}✓${R}  ML Asset: downloadDir                          ${YL}9.1 GB${R}
+${GR}✓${R}  ML Asset: com_apple_MobileAsset_LinguisticData ${YL}864 MB${R}
+${GR}✓${R}  ML Asset: com_apple_MobileAsset_UAF_Siri_Und.. ${YL}565 MB${R}
+${GR}✓${R}  ML Asset: com_apple_MobileAsset_DictionarySer. ${YL}231 MB${R}
+${GR}✓${R}  ML Asset: com_apple_MobileAsset_SpotlightRes.. ${YL}154 MB${R}
+${GR}✓${R}  ML Asset: com_apple_MobileAsset_ContextKit     ${YL}120 MB${R}
+EOF
+
+  box "Dev Tools" "2 found · ${YL}4.0 GB${R}" <<EOF
+${D}·${R}  Xcode DerivedData
+${D}·${R}  Xcode Archives
+${D}·${R}  Xcode iOS DeviceSupport
+${GR}✓${R}  iOS Simulators                                 ${YL}3.1 GB${R}
+${D}·${R}  Android SDK
+${D}·${R}  CocoaPods Cache
+${GR}✓${R}  node_modules (~/code)                          ${YL}895 MB${R}
+${D}·${R}  Rust targets (~/code)
+EOF
+
+  box "Dev Toolchains" "4 found · ${YL}1.1 GB${R}" <<EOF
+${D}·${R}  Cargo Registry
+${D}·${R}  Go Module Cache
+${GR}✓${R}  Go Build Cache                                 ${YL}163 MB${R}
+${GR}✓${R}  Gradle Caches                                  ${YL}338 MB${R}
+${GR}✓${R}  pyenv Versions                                 ${YL}521 MB${R}
+${GR}✓${R}  rbenv Versions                                  ${YL}98 MB${R}
+${D}·${R}  JetBrains Caches
+${D}·${R}  VS Code CachedData
+EOF
+
+  box "App Data" "5 found · ${YL}14.8 GB${R}" <<EOF
+${D}·${R}  Docker Data
+${GR}✓${R}  Claude VM Bundles                              ${YL}12.0 GB${R}
+${GR}✓${R}  Claude Cache                                   ${YL}111 MB${R}
+${D}·${R}  ChatGPT App Data
+${GR}✓${R}  Windsurf Data                                  ${YL}1.6 GB${R}
+${GR}✓${R}  Cursor Data                                    ${YL}200 MB${R}
+${GR}✓${R}  Slack Cache                                    ${YL}859 MB${R}
+${D}·${R}  Discord Cache
+EOF
+
+  box "Media Downloads" "nothing found" <<EOF
+${D}·${R}  Apple TV Cache
+${D}·${R}  Apple Music Media
+${D}·${R}  GarageBand Data
+${D}·${R}  Logic Pro Data
+EOF
+
+  box "Personal Data ${D}⚠ report only${R}" "nothing found" <<EOF
+${D}·${R}  Mail Database (V10)
+${D}·${R}  Messages Attachments
+${YL}⚠${R}  Messages exists but unreadable (TCC). Grant Full Disk Access.
+${D}·${R}  iCloud Drive (local)
+${D}·${R}  Photos Derivatives
+EOF
+
+  box "Logs & Diagnostics" "4 found · ${YL}1.8 GB${R}" <<EOF
+${GR}✓${R}  System Diagnostics                             ${YL}1.1 GB${R}
+${GR}✓${R}  UUID Text Logs                                 ${YL}491 MB${R}
+${GR}✓${R}  System Logs (var)                               ${YL}98 MB${R}
+${GR}✓${R}  User Logs                                       ${YL}52 MB${R}
+${D}·${R}  Crash Reporter
+${D}·${R}  QuickLook Thumbnails
+EOF
+
+  box "Caches" "11 found · ${YL}1.8 GB${R}" <<EOF
+${D}Scanning ~/Library/Caches for entries > 50 MB...${R}
+${GR}✓${R}  Cache: Google                                  ${YL}684 MB${R}
+${GR}✓${R}  Cache: com.nordvpn.macos                       ${YL}299 MB${R}
+${GR}✓${R}  Cache: vscode-cpptools                         ${YL}208 MB${R}
+${GR}✓${R}  Cache: com.apple.python                        ${YL}167 MB${R}
+${GR}✓${R}  Cache: Homebrew                                 ${YL}95 MB${R}
+${GR}✓${R}  Cache: com.spotify.client                       ${YL}84 MB${R}
+${GR}✓${R}  Cache: edtime_stempeluhr-updater                ${YL}81 MB${R}
+${GR}✓${R}  Cache: Firefox                                  ${YL}69 MB${R}
+${GR}✓${R}  Cache: heroku                                   ${YL}58 MB${R}
+${GR}✓${R}  Cache: node-gyp                                 ${YL}53 MB${R}
+${GR}✓${R}  Cache: snyk                                     ${YL}51 MB${R}
+EOF
+
+  box "Package Managers" "2 found · ${YL}147 MB${R}" <<EOF
+${GR}✓${R}  npm Cache                                       ${YL}52 MB${R}
+${D}·${R}  pnpm Store
+${D}·${R}  Yarn Cache
+${GR}✓${R}  Homebrew Cache                                  ${YL}95 MB${R}
+EOF
+
+  box "Ghost Apps" "nothing found" <<EOF
+${D}Checking for leftover data from uninstalled apps...${R}
+EOF
+
+  box "Docker" "nothing found" <<EOF
+EOF
+
+  box "Mail" "nothing found" <<EOF
+${D}·${R}  Mail Sync Logs
+${D}·${R}  Mail V10 (active — Sequoia)
+${YL}⚠${R}  Mail folder exists but cannot be read (TCC protection).
+   Grant Full Disk Access in System Settings.
+EOF
+
+  box "/var/folders" "2 found · ${YL}1.4 GB${R}" <<EOF
+${YL}⚠${R}  Scanning /private/var/folders/ requires admin access
+${GR}✓${R}  var/folders: s4y394392c3cx6fkd6q3wgl80000gp    ${YL}1.3 GB${R}
+${GR}✓${R}  var/folders: zyxvpxvq6csfxvn_n00000s0000068     ${YL}51 MB${R}
+EOF
+
+  box "Browser Caches" "1 found · ${YL}157 MB${R}" <<EOF
+${GR}✓${R}  Chrome Default CacheStorage                    ${YL}157 MB${R}
+${D}·${R}  Edge Default CacheStorage
+${D}·${R}  Safari Cache
+${D}·${R}  Firefox cache
+EOF
+
+  box "Browser Personal Data" "2 found · ${YL}540 MB${R}" <<EOF
+${GR}✓${R}  Chrome IndexedDB                                ${YL}51 MB${R}  ${RD}🔴 PERSONAL${R}
+${GR}✓${R}  Firefox storage                                ${YL}488 MB${R}  ${RD}🔴 PERSONAL${R}
+EOF
+
+  box "Cloud & Communication" "1 found · ${YL}661 MB${R}" <<EOF
+${D}·${R}  Dropbox Cache
+${GR}✓${R}  OneDrive Office                                ${YL}661 MB${R}
+${D}·${R}  Signal Attachments
+${D}·${R}  Spotify Stream Cache
+EOF
+
+  box "Homebrew Extras" "1 found · ${YL}367 MB${R}" <<EOF
+${GR}✓${R}  Homebrew Caskroom installers                   ${YL}367 MB${R}
+EOF
+
+  box "Version Managers" "1 found · ${YL}194 MB${R}" <<EOF
+${GR}✓${R}  nvm node versions (1 found)                    ${YL}194 MB${R}  ${YL}🟡 REBUILD${R}
+EOF
+
+  box "Minor System Directories" "1 found · ${YL}80 MB${R}" <<EOF
+${GR}✓${R}  HTTPStorages                                    ${YL}80 MB${R}
+${D}·${R}  Autosave Info
+${D}·${R}  PreferencePanes
+EOF
+
+  box "Untouchable" "5 found · ${RD}7.2 GB${R}" <<EOF
+${YL}⚠${R}  Untouchable scan needs sudo to read sleepimage and swap files.
+🔒  dyld shared cache                              ${RD}5.2 GB${R}  ${D}UNTOUCHABLE${R}
+🔒  sleepimage                                     ${RD}1.0 GB${R}  ${D}UNTOUCHABLE${R}
+🔒  macOS Update packages                          ${RD}1.0 GB${R}  ${D}UNTOUCHABLE${R}
+
+${D}Total untouchable: 7.2 GB — shown for transparency, never deletable${R}
+EOF
+
+  printf "  ${B}Found 44 items${R} — ${B}${YL}137.1 GB${R}${B} recoverable${R}  ${D}(scanned in 251s)${R}\n\n"
+  sleep 0.5
+}
+
+# ---------- Selector ----------
+# 21 visible items (all the rest are scrollable below)
+ITEMS=(
+  "Apple Screensavers (idleassetsd)|99.2 GB|██████████|🟢 SAFE"
+  "Claude VM Bundles               |12.0 GB|█▎░░░░░░░░|🟢 SAFE"
+  "ML Asset: downloadDir           | 9.1 GB|▉░░░░░░░░░|🟢 SAFE"
+  "iOS Simulators                  | 3.1 GB|▎░░░░░░░░░|🟢 SAFE"
+  "Windsurf Data                   | 1.6 GB|▏░░░░░░░░░|🟢 SAFE"
+  "var/folders: s4y394392c3cx6fk...| 1.3 GB|▏░░░░░░░░░|🟢 SAFE"
+  "System Diagnostics              | 1.1 GB|▏░░░░░░░░░|🟢 SAFE"
+  "node_modules (~/code)           | 895 MB|░░░░░░░░░░|🟢 SAFE"
+  "ML Asset: com_apple_MobileAss...| 864 MB|░░░░░░░░░░|🟢 SAFE"
+  "Slack Cache                     | 859 MB|░░░░░░░░░░|🟢 SAFE"
+  "Cache: Google                   | 684 MB|░░░░░░░░░░|🟢 SAFE"
+  "OneDrive Office                 | 661 MB|░░░░░░░░░░|🟢 SAFE"
+  "ML Asset: com_apple_MobileAss...| 565 MB|░░░░░░░░░░|🟢 SAFE"
+  "pyenv Versions                  | 521 MB|░░░░░░░░░░|🟢 SAFE"
+  "UUID Text Logs                  | 491 MB|░░░░░░░░░░|🟢 SAFE"
+  "Firefox storage                 | 488 MB|░░░░░░░░░░|🔴 PERSONAL"
+  "Homebrew Caskroom installers    | 367 MB|░░░░░░░░░░|🟢 SAFE"
+  "Gradle Caches                   | 338 MB|░░░░░░░░░░|🟢 SAFE"
+  "Cache: com.nordvpn.macos        | 299 MB|░░░░░░░░░░|🟢 SAFE"
+  "ML Asset: com_apple_MobileAss...| 231 MB|░░░░░░░░░░|🟢 SAFE"
+  "Cache: vscode-cpptools          | 208 MB|░░░░░░░░░░|🟢 SAFE"
+)
+
+# render_selector cursor_idx marks_string count_label detail_fn
+render_selector() {
+  local cursor=$1 marks=$2 count_label=$3 detail_fn=$4
+  clear_screen
+  header
+  printf "  ${B}Select items to delete:${R}\n\n\n"
+
+  local i
+  for ((i=0; i<21; i++)); do
+    local item="${ITEMS[$i]}"
+    local name="${item%%|*}"
+    local rest="${item#*|}"
+    local size="${rest%%|*}"
+    rest="${rest#*|}"
+    local bar="${rest%%|*}"
+    local risk="${rest#*|}"
+
+    local mark="${marks:$i:1}"
+    local mark_str
+    if [[ "$mark" == "x" ]]; then
+      mark_str="${GR}[x]${R}"
+    else
+      mark_str="${D}[ ]${R}"
+    fi
+
+    local risk_colored
+    case "$risk" in
+      *PERSONAL*) risk_colored="${RD}${risk}${R}" ;;
+      *REBUILD*)  risk_colored="${YL}${risk}${R}" ;;
+      *)          risk_colored="${GR}${risk}${R}" ;;
+    esac
+
+    if [[ $i -eq $cursor ]]; then
+      printf "  ${CY}>${R} %s ${B}%s${R} %s ${D}%s${R} %s\n" "$mark_str" "$name" "$size" "$bar" "$risk_colored"
+    else
+      printf "    %s %s %s ${D}%s${R} %s\n" "$mark_str" "$name" "$size" "$bar" "$risk_colored"
+    fi
+  done
+
+  printf "    ${D}▼ 23 more below${R}\n\n"
+  printf "  ${B}Selected:${R} %s\n" "$count_label"
+  printf "  ${D}↑↓ move  ␣ toggle  A all  N none  ⏎ confirm  q quit${R}\n\n"
+  $detail_fn
+}
+
+# ---------- Detail panels ----------
+detail_apple() {
+  printf "${B}╭─ Apple Screensavers (idleassetsd) ──────────────────────────────╮${R}\n"
+  printf "${B}│${R} Risk: ${GR}🟢 SAFE${R} — Regenerates without effort                       ${B}│${R}\n"
+  printf "${B}│${R} Path: /Library/Application Support/com.apple.idleassetsd        ${B}│${R}\n"
+  printf "${B}│${R} Size: ${YL}99.2 GB${R}                                                   ${B}│${R}\n"
+  printf "${B}│${R} Category: System                                                ${B}│${R}\n"
+  printf "${B}│${R} Last modified: 2026-04-05                                       ${B}│${R}\n"
+  printf "${B}╰─────────────────────────────────────────────────────────────────╯${R}\n"
+}
+
+detail_claude() {
+  printf "${B}╭─ Claude VM Bundles ─────────────────────────────────────────────╮${R}\n"
+  printf "${B}│${R} Risk: ${GR}🟢 SAFE${R} — Regenerates without effort                       ${B}│${R}\n"
+  printf "${B}│${R} Path: ~/Library/Application Support/Claude/vm_bundles           ${B}│${R}\n"
+  printf "${B}│${R} Size: ${YL}12.0 GB${R}                                                   ${B}│${R}\n"
+  printf "${B}│${R} Category: App                                                   ${B}│${R}\n"
+  printf "${B}│${R} Last modified: 2026-04-06                                       ${B}│${R}\n"
+  printf "${B}╰─────────────────────────────────────────────────────────────────╯${R}\n"
+}
+
+detail_mlasset() {
+  printf "${B}╭─ ML Asset: downloadDir ─────────────────────────────────────────╮${R}\n"
+  printf "${B}│${R} Risk: ${GR}🟢 SAFE${R} — Regenerates without effort                       ${B}│${R}\n"
+  printf "${B}│${R} Path: /System/Library/AssetsV2/.../downloadDir                  ${B}│${R}\n"
+  printf "${B}│${R} Size: ${YL}9.1 GB${R}                                                    ${B}│${R}\n"
+  printf "${B}│${R} Category: Apple Intelligence / ML                               ${B}│${R}\n"
+  printf "${B}│${R} Last modified: 2026-04-04                                       ${B}│${R}\n"
+  printf "${B}╰─────────────────────────────────────────────────────────────────╯${R}\n"
+}
+
+# ---------- Selector animation ----------
+selector_animation() {
+  local all_x="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  local all_dot="............................................"
+  local only_ml="..x........................................."
+
+  # Frame 1: opens with all selected, cursor on Apple Screensavers
+  render_selector 0 "$all_x" "44/44 items — 137.1 GB" detail_apple
+  sleep 2.4
+
+  # Frame 2: press N — deselect all
+  render_selector 0 "$all_dot" "0/44 items — 0 B" detail_apple
+  sleep 1.8
+
+  # Frame 3: navigate down to Claude VM Bundles
+  render_selector 1 "$all_dot" "0/44 items — 0 B" detail_claude
+  sleep 0.5
+
+  # Frame 4: navigate down to ML Asset: downloadDir
+  render_selector 2 "$all_dot" "0/44 items — 0 B" detail_mlasset
+  sleep 1.0
+
+  # Frame 5: select it
+  render_selector 2 "$only_ml" "1/44 items — 9.1 GB" detail_mlasset
+  sleep 2.2
+
+  # Frame 6: confirmation
+  clear_screen
+  header
+  printf "  ${B}Confirm cleanup${R}\n\n"
+  printf "  ${GR}✓${R} ML Asset: downloadDir       ${YL}9.1 GB${R}\n"
+  printf "    ${D}/System/Library/AssetsV2/.../downloadDir${R}\n\n"
+  printf "  Total to remove: ${B}9.1 GB${R}\n\n"
+  printf "  Proceed? ${GR}[Y]${R}/n  ${D}▮${R}\n"
+  sleep 1.6
+}
+
+# ---------- Cleanup ----------
+cleanup_animation() {
+  clear_screen
+  header
+  printf "  ${B}Cleaning...${R}\n\n"
+  printf "  Removing ML Asset: downloadDir\n"
+  printf "  ${D}/System/Library/AssetsV2/.../downloadDir${R}\n\n"
+
+  local width=42 pct
+  for pct in 5 14 24 35 47 58 68 78 86 93 98 100; do
+    local filled=$((pct * width / 100))
+    local empty=$((width - filled))
+    local bar="" i
+    for ((i=0; i<filled; i++)); do bar+="█"; done
+    for ((i=0; i<empty; i++)); do bar+="░"; done
+    printf "\r  ${CY}%s${R} %3d%%" "$bar" "$pct"
+    sleep 0.15
+  done
+  printf "\n\n"
+  printf "  ${GR}✓${R} Removed ${B}9.1 GB${R} in 3.4s\n\n"
+  sleep 0.9
+}
+
+# ---------- Before / After ----------
+before_after() {
+  printf "${B}${CY}═══════════════════════════════════════════════${R}\n"
+  printf "                  ${B}Disk recovered${R}\n"
+  printf "${B}${CY}═══════════════════════════════════════════════${R}\n\n"
+  printf "    Before:  ${YL}236.7 GB${R} free    ${D}of 460.4 GB${R}\n"
+  printf "    After:   ${GR}245.8 GB${R} free    ${D}of 460.4 GB${R}\n\n"
+  printf "              ${B}${GR}+ 9.1 GB${R} ${D}freed${R}\n\n"
+  printf "${B}${CY}═══════════════════════════════════════════════${R}\n\n"
+  printf "  ${D}128.0 GB still reclaimable. Run ${R}${CY}diskdoc${R}${D} again anytime.${R}\n\n"
+}
+
+# ---------- Main dispatch ----------
+case "${1:-}" in
+  --scan)
+    clear_screen
+    header
+    scan_animation
+    sleep 1.0
+    ;;
+  "")
+    if [[ -f /tmp/.diskdoc-mock-scanned ]]; then
+      clear_screen
+      header
+      printf "  ${D}Using cached scan from a moment ago...${R}\n\n"
+      sleep 0.7
+    else
+      clear_screen
+      header
+      scan_animation
+      sleep 0.8
+      touch /tmp/.diskdoc-mock-scanned
+    fi
+    selector_animation
+    cleanup_animation
+    before_after
+    sleep 1.2
+    rm -f /tmp/.diskdoc-mock-scanned
+    ;;
+  --help|-h)
+    header
+    printf "  ${B}Usage:${R}\n"
+    printf "    diskdoc           Scan + interactive selector + clean\n"
+    printf "    diskdoc --scan    Preview only (read-only)\n"
+    ;;
+  *)
+    echo "diskdoc: unknown option: $1"
+    exit 1
+    ;;
+esac

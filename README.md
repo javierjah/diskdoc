@@ -8,6 +8,10 @@ Apple doesn't want you to find what's eating your disk. They want you to buy a n
 
 `diskdoc` is the tool Apple will never build. One command. Full transparency. You choose what to delete.
 
+<p align="center">
+  <img src="demo/diskdoc.gif" alt="diskdoc demo" width="600">
+</p>
+
 ## Install
 
 ### Homebrew
@@ -118,7 +122,7 @@ Excluded items show up as `⊘ excluded` during scans.
 
 ## Interactive Selection
 
-On bash 4+, `diskdoc` gives you collapsible category trees. On bash 3.2 (macOS default), it falls back to a paginated flat list. Both support keyboard navigation, toggling, and batch selection.
+`diskdoc` uses a paginated flat list selector with keyboard navigation, toggling, and batch selection. Works with bash 3.2+ (macOS default).
 
 ```
   ▼ System (105.4 GB)                                              4 items
