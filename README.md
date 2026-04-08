@@ -100,7 +100,7 @@ diskdoc history            # See your cleanup history
 
 diskdoc is built around one principle: **you decide**. Nothing gets deleted without your explicit confirmation. Specifically:
 
-- **Interactive mode requires explicit selection.**. You manually pick what to delete with the spacebar, then confirm with Enter.
+- **Interactive mode requires explicit selection.** You manually pick what to delete with the spacebar, then confirm with Enter.
 - **`--auto` only touches SAFE items.** It will never auto-delete REBUILD, PERSONAL, or UNTOUCHABLE items, regardless of how you invoke it.
 - **PERSONAL items are never auto-deleted.** Mail, Messages, browser history, iCloud cache — these only show up in `--report` for awareness. Cleaning them requires manual interactive selection.
 - **UNTOUCHABLE items have no delete code path at all.** dyld cache, sleepimage, ML Assets, Simulator Volumes, /var/folders, Rosetta — diskdoc detects and shows them, but no command in the codebase can remove them. They're protected by SIP at the OS level too — even `sudo rm -rf` fails.
@@ -171,52 +171,90 @@ Excluded items show up as `⊘ excluded` during scans.
 
 `diskdoc` uses a paginated flat list selector with keyboard navigation, toggling, and batch selection. Works with the bash that ships with macOS — no upgrades needed.
 
+Here's a real scan from a working developer's Mac — the kind of disk state diskdoc is built for:
+
 ```
-  Found 13 items — 12.0 GB recoverable  (scanned in 112s)
+  Found 38 items — 71.8 GB recoverable  (scanned in 190s)
 
   Select items to delete:
 
-    [x] Spotlight Index                       3.9 GB  ██████████  🟡 REBUILD
-    [x] Homebrew Cache                        2.5 GB  ██████▏░░░  🟢 SAFE
-    [x] System Diagnostics                    923 MB  ██▎░░░░░░░  🟢 SAFE
-    [x] node_modules (~/code)                 895 MB  ██▏░░░░░░░  🟢 SAFE
-    [x] UUID Text Logs                        865 MB  ██▏░░░░░░░  🟢 SAFE
-    [x] Cache: Google                         826 MB  ██░░░░░░░░  🟢 SAFE
-    [x] Slack Cache                           787 MB  █▉░░░░░░░░  🟢 SAFE
-    [x] Firefox storage                       457 MB  █▏░░░░░░░░  🔴 PERSONAL
-  > [x] pyenv Versions                        378 MB  ▉░░░░░░░░░  🟢 SAFE
-    [x] Gradle Caches                         287 MB  ▋░░░░░░░░░  🟢 SAFE
-    [x] Windsurf Data                         196 MB  ▍░░░░░░░░░  🟢 SAFE
-    [x] Container: com.apple.wallpaper.agent   56 MB  ▏░░░░░░░░░  🟢 SAFE
-    [x] Metadata                               54 MB  ▏░░░░░░░░░  🟢 SAFE
+  > [x] Android AVDs                           23.4 GB  ██████████  🟢 SAFE
+    [x] Simulator Volumes                      15.5 GB  ██████▋░░░  🟢 SAFE
+    [x] Claude VM Bundles                      12.0 GB  █████▏░░░░  🟢 SAFE
+    [x] ML Asset: com_apple…MacSoftwareUpdate   3.3 GB  █▍░░░░░░░░  🟢 SAFE
+    [x] ML Asset: com_apple…SFRSoftwareUpdate   3.1 GB  █▎░░░░░░░░  🟢 SAFE
+    [x] iOS Simulators                          3.1 GB  █▎░░░░░░░░  🟢 SAFE
+    [x] Windsurf Data                           1.6 GB  ▋░░░░░░░░░  🟢 SAFE
+    [x] System Diagnostics                      1.1 GB  ▍░░░░░░░░░  🟢 SAFE
+    [x] VS Code Workspaces                      1.0 GB  ▍░░░░░░░░░  🟢 SAFE
+    [x] node_modules (~/code)                   895 MB  ▍░░░░░░░░░  🟢 SAFE
+    [x] ML Asset: com_apple…LinguisticData      864 MB  ▍░░░░░░░░░  🟢 SAFE
+    [x] Slack Cache                             859 MB  ▍░░░░░░░░░  🟢 SAFE
+    [x] Maven Repository                        749 MB  ▎░░░░░░░░░  🟢 SAFE
+    [x] ML Asset: com_apple…UAF_Siri            565 MB  ▎░░░░░░░░░  🟢 SAFE
+    [x] pyenv Versions                          521 MB  ▎░░░░░░░░░  🟢 SAFE
+    [x] UUID Text Logs                          512 MB  ▎░░░░░░░░░  🟢 SAFE
+    [x] Gradle Caches                           338 MB  ▏░░░░░░░░░  🟢 SAFE
+    [x] Ghost: zoom.us                          327 MB  ▏░░░░░░░░░  🟢 SAFE
+    [x] Cache: com.nordvpn.macos                299 MB  ▏░░░░░░░░░  🟢 SAFE
+    [x] Cache: vscode-cpptools                  208 MB  ▏░░░░░░░░░  🟢 SAFE
+    ▼ 18 more below
 
-  Selected: 13/13 items — 12.0 GB
+  Selected: 38/38 items — 71.8 GB
   ↑↓ move  ␣ toggle  A all  N none  ⏎ confirm  q quit
 ```
+
+**71.8 GB hiding in plain sight.** Android AVDs you forgot about. Simulator runtimes from an old Xcode. Claude VM bundles. ML models Apple silently downloaded. A zoom.us install you uninstalled months ago but its caches never left. None of this shows up in macOS Storage settings. All of it is yours to reclaim.
 
 ## Report Mode
 
 `diskdoc --report` gives a full audit with proportional bars and risk tags. Includes PERSONAL and UNTOUCHABLE sections. Nothing is deleted.
 
 ```
-  Dev Tools  (1.6 GB)
-  ├── node_modules (~/code)                 895 MB  ██████████  🟢 SAFE
-  ├── pyenv Versions                        378 MB  ████▎░░░░░  🟢 SAFE
-  └── Gradle Caches                         287 MB  ███▎░░░░░░  🟢 SAFE
+  diskdoc report — Full Disk Audit
 
-  System  (3.9 GB)
-  └── Spotlight Index                       3.9 GB  ██████████  🟡 REBUILD
+  Dev Tools  (45.8 GB)
+  ├── Android AVDs                    23.4 GB  ██████████  🟢 SAFE
+  ├── Simulator Volumes               15.5 GB  ██████▋░░░  🟢 SAFE
+  ├── iOS Simulators                   3.1 GB  █▎░░░░░░░░  🟢 SAFE
+  ├── VS Code Workspaces               1.0 GB  ▍░░░░░░░░░  🟢 SAFE
+  ├── node_modules (~/code)            895 MB  ▍░░░░░░░░░  🟢 SAFE
+  ├── Maven Repository                 749 MB  ▎░░░░░░░░░  🟢 SAFE
+  ├── pyenv Versions                   521 MB  ▎░░░░░░░░░  🟢 SAFE
+  ├── Gradle Caches                    338 MB  ▏░░░░░░░░░  🟢 SAFE
+  └── rbenv Versions                    98 MB  ░░░░░░░░░░  🟢 SAFE
+
+  App  (15.0 GB)
+  ├── Claude VM Bundles               12.0 GB  ██████████  🟢 SAFE
+  ├── Windsurf Data                    1.6 GB  █▎░░░░░░░░  🟢 SAFE
+  ├── Slack Cache                      859 MB  ▋░░░░░░░░░  🟢 SAFE
+  └── Ghost: zoom.us                   327 MB  ▎░░░░░░░░░  🟢 SAFE
+
+  System  (8.0 GB)
+  ├── ML Asset: MacSoftwareUpdate      3.3 GB  ██████████  🟢 SAFE
+  ├── ML Asset: SFRSoftwareUpdate      3.1 GB  █████████▌  🟢 SAFE
+  ├── ML Asset: LinguisticData         864 MB  ██▋░░░░░░░  🟢 SAFE
+  └── ML Asset: UAF_Siri               565 MB  █▊░░░░░░░░  🟢 SAFE
+
+  Cache  (1.1 GB)
+  ├── Cache: com.nordvpn.macos         299 MB  ██████████  🟢 SAFE
+  ├── Cache: vscode-cpptools           208 MB  ██████▉░░░  🟢 SAFE
+  ├── Cache: com.apple.python          167 MB  █████▌░░░░  🟢 SAFE
+  └── Cache: Homebrew                   88 MB  ██▉░░░░░░░  🟢 SAFE
+
+  Total: 71.8 GB  (38 items across 6 categories)
 
   ╭─ 🔒 Untouchable — Apple's territory ──────────────────────╮
   │ Total: 26.5 GB — none of this can be safely removed       │
   │                                                           │
-  │  🔒 ML Asset: LinguisticData              1.7 GB          │
-  │  🔒 Simulator Volumes (CoreSimulator)    15.5 GB          │
   │  🔒 dyld shared cache                     5.8 GB          │
-  │  🔒 Rosetta 2 cache (/var/db/oah)             —           │
   │  🔒 sleepimage                            2.0 GB          │
+  │  🔒 Rosetta 2 cache (/var/db/oah)             —           │
   │  🔒 /var/folders (daemon caches)         171 MB           │
   ╰───────────────────────────────────────────────────────────╯
+
+  Report mode: nothing was deleted.
+  Items tagged PERSONAL are included for audit only.
 ```
 
 ## How It Works
