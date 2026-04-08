@@ -23,7 +23,7 @@
 # shellcheck disable=SC2059,SC2004
 set -uo pipefail
 
-VERSION="1.0.1"
+VERSION="1.0.2"
 
 # ── Colors (16 ANSI standard — adapts to any terminal theme) ────────────────
 # Semantic names: use these, not raw color names
@@ -875,6 +875,85 @@ draw_bar() {
   printf '%s' "$bar"
 }
 
+# Fast inline version — writes result to _RESULT variable, no subshell
+_draw_bar_fast() {
+  local value=$1 max_val=$2 width=${3:-10}
+  local filled=0
+  (( max_val > 0 )) && filled=$(( (value * width * 8) / max_val ))
+  local full=$(( filled / 8 ))
+  local rem=$(( filled % 8 ))
+  local emp=$(( width - full - (rem > 0 ? 1 : 0) ))
+  local eighth=('█' '▏' '▎' '▍' '▌' '▋' '▊' '▉')
+  _RESULT=""
+  local _f="████████████████████████████████████████"
+  local _e="░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░"
+  _RESULT="${_f:0:full}"
+  (( rem > 0 )) && _RESULT+="${eighth[$rem]}"
+  _RESULT+="${_e:0:emp}"
+}
+
+# Fast fmt — writes result to _RESULT variable, no subshell/awk
+_fmt_fast() {
+  local kb=$1
+  if (( kb >= 1073741824 )); then
+    local whole=$(( kb / 1073741824 ))
+    local frac=$(( (kb % 1073741824) * 10 / 1073741824 ))
+    _RESULT="${whole}.${frac} TB"
+  elif (( kb >= 1048576 )); then
+    local whole=$(( kb / 1048576 ))
+    local frac=$(( (kb % 1048576) * 10 / 1048576 ))
+    _RESULT="${whole}.${frac} GB"
+  elif (( kb >= 1024 )); then
+    _RESULT="$(( kb / 1024 )) MB"
+  else
+    _RESULT="${kb} KB"
+  fi
+}
+
+# Fast risk_color — writes to _RESULT, no subshell
+_risk_color_fast() {
+  case "$1" in
+    SAFE)        _RESULT="$C_SUCCESS" ;;
+    REBUILD)     _RESULT="$C_WARNING" ;;
+    PERSONAL)    _RESULT="$C_DANGER" ;;
+    UNTOUCHABLE) _RESULT="$C_ACCENT" ;;
+    *)           _RESULT="$C_RESET" ;;
+  esac
+}
+
+# Fast risk_icon — writes to _RESULT, no subshell
+_risk_icon_fast() {
+  if [[ "$HAS_EMOJI" == true ]]; then
+    case "$1" in
+      SAFE)        _RESULT='🟢' ;;
+      REBUILD)     _RESULT='🟡' ;;
+      PERSONAL)    _RESULT='🔴' ;;
+      UNTOUCHABLE) _RESULT='🔒' ;;
+      *)           _RESULT=' ' ;;
+    esac
+  else
+    case "$1" in
+      SAFE)        _RESULT="${C_SUCCESS}●${C_RESET}" ;;
+      REBUILD)     _RESULT="${C_WARNING}●${C_RESET}" ;;
+      PERSONAL)    _RESULT="${C_DANGER}●${C_RESET}" ;;
+      UNTOUCHABLE) _RESULT="${C_ACCENT}■${C_RESET}" ;;
+      *)           _RESULT=' ' ;;
+    esac
+  fi
+}
+
+# Fast truncate — bash builtins only, no wc/cut forks
+_truncate_fast() {
+  local str="$1" max="$2"
+  local len=${#str}
+  if (( len <= max )); then
+    _RESULT="$str"
+    return
+  fi
+  local half=$(( (max - 1) / 2 ))
+  _RESULT="${str:0:half}…${str: -half}"
+}
+
 # ── TUI: Generic box drawing ────────────────────────────────────────────────
 
 # draw_box title color width lines...
@@ -967,96 +1046,170 @@ _interactive_select_flat() {
     (( T_SIZES[$ri] > max_kb )) && max_kb=${T_SIZES[$ri]}
   done
 
+  # ── Pre-compute all static display data (never changes between redraws) ──
+  local -a _PC_NAMES=()   # pre-computed truncated names
+  local -a _PC_SIZES=()   # pre-computed formatted sizes
+  local -a _PC_BARS=()    # pre-computed bar strings
+  local -a _PC_COLORS=()  # pre-computed risk colors
+  local -a _PC_ICONS=()   # pre-computed risk icons
+  local -a _PC_TAGS=()    # risk tag strings
+  local -a _PC_SKBS=()    # raw KB for selection tracking
+
+  for ((si=0; si<num; si++)); do
+    local ri="${SORTED[$si]#*|}"
+    _truncate_fast "${T_NAMES[$ri]}" "$UI_NAME_WIDTH"; _PC_NAMES[$si]="$_RESULT"
+    if [[ "${T_METHODS[$ri]}" == "tm-thin" ]]; then
+      _PC_SIZES[$si]="${TM_SNAP_COUNT} snaps"
+    else
+      _fmt_fast "${T_SIZES[$ri]}"; _PC_SIZES[$si]="$_RESULT"
+    fi
+    _draw_bar_fast "${T_SIZES[$ri]}" "$max_kb" "$UI_BAR_WIDTH"; _PC_BARS[$si]="$_RESULT"
+    _risk_color_fast "${T_RISKS[$ri]}"; _PC_COLORS[$si]="$_RESULT"
+    _risk_icon_fast "${T_RISKS[$ri]}"; _PC_ICONS[$si]="$_RESULT"
+    _PC_TAGS[$si]="${T_RISKS[$ri]}"
+    _PC_SKBS[$si]="${T_SIZES[$ri]}"
+  done
+
+  # ── Pre-compute detail panel static fields ──
+  local -a _PC_DPATHS=()
+  local -a _PC_DCATS=()
+  local -a _PC_DDESCS=()
+  for ((si=0; si<num; si++)); do
+    local ri="${SORTED[$si]#*|}"
+    _PC_DPATHS[$si]="${T_PATHS[$ri]}"
+    _PC_DCATS[$si]="${T_CATS[$ri]}"
+    case "${T_RISKS[$ri]}" in
+      SAFE)     _PC_DDESCS[$si]="Regenerates without effort" ;;
+      REBUILD)  _PC_DDESCS[$si]="Costly to reconstruct from backup" ;;
+      PERSONAL) _PC_DDESCS[$si]="User data — shown for awareness only" ;;
+      *)        _PC_DDESCS[$si]="" ;;
+    esac
+  done
+
+  # ── Incremental selection tracking ──
+  local sel_count=0 sel_kb=0
+  for ((i=0; i<num; i++)); do
+    if [[ "${SELECTED[$i]}" == "1" ]]; then
+      ((sel_kb += _PC_SKBS[$i]))
+      ((sel_count++)) || true
+    fi
+  done
+
   detect_term_size
-  # Reserve lines for header(1) + status(3) + detail(8) + padding(2) = 14
   local page_size=$(( TERM_LINES > 14 ? TERM_LINES - 14 : 20 ))
   (( page_size < 5 )) && page_size=5
   (( page_size > num )) && page_size=$num
 
-  tput civis 2>/dev/null
+  # Hide cursor with raw ANSI (no tput fork)
+  printf '\033[?25l'
   stty -echo -icanon 2>/dev/null
-  trap 'tput cnorm 2>/dev/null; stty sane 2>/dev/null' EXIT INT TERM
+  trap 'printf "\033[?25h"; stty sane 2>/dev/null' EXIT INT TERM
 
   _draw_flat() {
     [[ "${1:-}" == "redraw" ]] && printf '\033[%dA' "$_last_draw_lines"
 
-    local sel_kb=0 sel_count=0
-    for ((i=0; i<num; i++)); do
-      if [[ "${SELECTED[$i]}" == "1" ]]; then
-        local ri="${SORTED[$i]#*|}"
-        sel_kb=$((sel_kb + T_SIZES[$ri]))
-        ((sel_count++)) || true
-      fi
-    done
-
-    # Adjust scroll window to keep cursor visible
+    # Adjust scroll window
     (( cursor < scroll )) && scroll=$cursor
     (( cursor >= scroll + page_size )) && scroll=$(( cursor - page_size + 1 ))
 
-    local drawn=0
+    local buf="" drawn=0
     local end=$(( scroll + page_size ))
     (( end > num )) && end=$num
 
     # Scroll indicator top
     if (( scroll > 0 )); then
-      printf "  ${C_DIM}  ▲ %d more above${C_RESET}\033[K\n" "$scroll"
+      buf+="  ${C_DIM}  ▲ ${scroll} more above${C_RESET}\033[K\n"
     else
-      printf "\033[K\n"
+      buf+="\033[K\n"
     fi
     ((drawn++))
 
+    # Item rows
     for ((si=scroll; si<end; si++)); do
-      local ri="${SORTED[$si]#*|}"
-      local name
-      name=$(truncate_middle "${T_NAMES[$ri]}" "$UI_NAME_WIDTH")
-      local sf
-      if [[ "${T_METHODS[$ri]}" == "tm-thin" ]]; then
-        sf="${TM_SNAP_COUNT} snaps"
-      else
-        sf=$(fmt "${T_SIZES[$ri]}")
-      fi
-      local tag="${T_RISKS[$ri]}"
-      local rc
-      rc=$(risk_color "$tag")
-      local icon
-      icon=$(risk_icon "$tag")
-      local bar
-      bar=$(draw_bar "${T_SIZES[$ri]}" "$max_kb" "$UI_BAR_WIDTH")
-
       local check="[ ]"
       [[ "${SELECTED[$si]}" == "1" ]] && check="[x]"
 
       if (( si == cursor )); then
-        printf "  ${C_BOLD}${C_INFO}> ${check}${C_RESET} %-${UI_NAME_WIDTH}s %10s %s %s ${rc}${C_BOLD}%-8s${C_RESET}\033[K\n" \
-          "$name" "$sf" "$bar" "$icon" "$tag"
+        printf -v _line "  ${C_BOLD}${C_INFO}> ${check}${C_RESET} %-${UI_NAME_WIDTH}s %10s %s %s ${_PC_COLORS[$si]}${C_BOLD}%-8s${C_RESET}\033[K\n" \
+          "${_PC_NAMES[$si]}" "${_PC_SIZES[$si]}" "${_PC_BARS[$si]}" "${_PC_ICONS[$si]}" "${_PC_TAGS[$si]}"
       else
-        printf "    ${check} %-${UI_NAME_WIDTH}s %10s %s %s ${rc}%-8s${C_RESET}\033[K\n" \
-          "$name" "$sf" "$bar" "$icon" "$tag"
+        printf -v _line "    ${check} %-${UI_NAME_WIDTH}s %10s %s %s ${_PC_COLORS[$si]}%-8s${C_RESET}\033[K\n" \
+          "${_PC_NAMES[$si]}" "${_PC_SIZES[$si]}" "${_PC_BARS[$si]}" "${_PC_ICONS[$si]}" "${_PC_TAGS[$si]}"
       fi
+      buf+="$_line"
       ((drawn++))
     done
 
     # Scroll indicator bottom
     local remaining=$(( num - end ))
     if (( remaining > 0 )); then
-      printf "  ${C_DIM}  ▼ %d more below${C_RESET}\033[K\n" "$remaining"
+      buf+="  ${C_DIM}  ▼ ${remaining} more below${C_RESET}\033[K\n"
     else
-      printf "\033[K\n"
+      buf+="\033[K\n"
     fi
     ((drawn++))
 
-    printf "\033[K\n"
-    printf "  ${C_BOLD}Selected: %d/%d items — %s${C_RESET}\033[K\n" "$sel_count" "$num" "$(fmt $sel_kb)"
-    printf "  ${C_DIM}↑↓ move  ␣ toggle  A all  N none  ⏎ confirm  q quit${C_RESET}\033[K\n"
+    # Status line
+    _fmt_fast "$sel_kb"
+    buf+="\033[K\n"
+    buf+="  ${C_BOLD}Selected: ${sel_count}/${num} items — ${_RESULT}${C_RESET}\033[K\n"
+    buf+="  ${C_DIM}↑↓ move  ␣ toggle  A all  N none  ⏎ confirm  q quit${C_RESET}\033[K\n"
     drawn=$((drawn + 3))
 
-    # Detail panel
-    local ri="${SORTED[$cursor]#*|}"
-    printf "\033[K\n"
-    printf "  "; render_detail_panel "$ri"
-    drawn=$((drawn + 8))
+    # Detail panel (inline — no render_detail_panel fork)
+    local _ci=$cursor
+    local _dname="${_PC_NAMES[$_ci]}"
+    local _drc="${_PC_COLORS[$_ci]}"
+    local _dtag="${_PC_TAGS[$_ci]}"
+    local _dicon="${_PC_ICONS[$_ci]}"
+    local _dpath="${_PC_DPATHS[$_ci]}"
+    local _dcat="${_PC_DCATS[$_ci]}"
+    local _ddesc="${_PC_DDESCS[$_ci]}"
+    _fmt_fast "${_PC_SKBS[$_ci]}"; local _dsize="$_RESULT"
 
+    local _dmtime="unknown"
+    if [[ -e "$_dpath" ]]; then
+      _dmtime=$(stat -f "%Sm" -t "%Y-%m-%d" "$_dpath" 2>/dev/null || echo "unknown")
+    fi
+
+    local _bw=$((TERM_COLS > 70 ? 66 : TERM_COLS - 4))
+    local _inner=$((_bw - 2))
+
+    # Box top
+    local _tlen=${#_dname}
+    local _tpad=$((_inner - _tlen - 2))
+    (( _tpad < 0 )) && _tpad=0
+    local _hline=""
+    for ((i=0; i<_tpad; i++)); do _hline+="─"; done
+    buf+="\033[K\n"
+    buf+="  ${_drc}╭─ ${_dname} ${C_RESET}${C_DIM}${_hline}${C_RESET}${_drc}╮${C_RESET}\n"
+
+    # Box lines
+    local -a _blines=(
+      "Risk: ${_dicon} ${_dtag} — ${_ddesc}"
+      "Path: ${_dpath}"
+      "Size: ${_dsize}"
+      "Category: ${_dcat}"
+      "Last modified: ${_dmtime}"
+    )
+    for _bl in "${_blines[@]}"; do
+      local _bll=${#_bl}
+      local _brp=$((_inner - _bll))
+      (( _brp < 0 )) && _brp=0
+      printf -v _bpad "%-${_brp}s" ""
+      buf+="  ${_drc}│${C_RESET} ${_bl}${_bpad}${_drc}│${C_RESET}\n"
+    done
+
+    # Box bottom
+    local _bline=""
+    for ((i=0; i<_inner; i++)); do _bline+="─"; done
+    buf+="  ${_drc}╰${_bline}╯${C_RESET}\033[K\n"
+
+    drawn=$((drawn + 8))
     _last_draw_lines=$drawn
+
+    # Single write — flush entire frame at once
+    printf '%b' "$buf"
   }
 
   local _last_draw_lines=0
@@ -1075,15 +1228,29 @@ _interactive_select_flat() {
       ' ')
         if [[ "${SELECTED[$cursor]}" == "1" ]]; then
           SELECTED[$cursor]=0
+          ((sel_kb -= _PC_SKBS[$cursor]))
+          ((sel_count--))
         else
           SELECTED[$cursor]=1
+          ((sel_kb += _PC_SKBS[$cursor]))
+          ((sel_count++)) || true
         fi
         ;;
-      'a'|'A') for ((i=0; i<num; i++)); do SELECTED[$i]=1; done ;;
-      'n'|'N') for ((i=0; i<num; i++)); do SELECTED[$i]=0; done ;;
+      'a'|'A')
+        sel_kb=0; sel_count=0
+        for ((i=0; i<num; i++)); do
+          SELECTED[$i]=1
+          ((sel_kb += _PC_SKBS[$i]))
+          ((sel_count++)) || true
+        done
+        ;;
+      'n'|'N')
+        for ((i=0; i<num; i++)); do SELECTED[$i]=0; done
+        sel_kb=0; sel_count=0
+        ;;
       ''|$'\n') break ;;
       'q'|'Q')
-        tput cnorm 2>/dev/null
+        printf '\033[?25h'
         stty sane 2>/dev/null
         echo ""
         printf "  ${C_DIM}Cancelled. Nothing was deleted.${C_RESET}\n"
@@ -1093,7 +1260,7 @@ _interactive_select_flat() {
     _draw_flat "redraw"
   done
 
-  tput cnorm 2>/dev/null
+  printf '\033[?25h'
   stty sane 2>/dev/null
 }
 

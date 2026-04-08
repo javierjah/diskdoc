@@ -5,6 +5,16 @@ All notable changes to diskdoc are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-04-09
+
+### Fixed
+- **Interactive mode input lag**: eliminated ~120 process forks per keypress
+  by pre-computing all display data (truncated names, formatted sizes, bar
+  graphs, risk colors/icons) once before entering the input loop, replacing
+  subshell calls with fast bash-builtin variants, tracking selection totals
+  incrementally, and buffering the entire frame into a single write. Result:
+  ~240-600ms/keypress → ~5-15ms.
+
 ## [1.0.1] — 2026-04-08
 
 ### Changed
