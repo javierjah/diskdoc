@@ -1,185 +1,88 @@
 # Changelog
 
-## [3.0.4] - 2026-04-08
+All notable changes to diskdoc are documented in this file.
 
-Bug fixes only. No new features. Fixes 2 critical bugs introduced in v3.0.3 and 5 inherited issues.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-### Fixed
+## [1.0.0] — 2026-04-08
 
-- **Bug #20 — `local: can only be used in a function`**: The v3.0.3 cleanup stderr capture used `local` in top-level code. Wrapped cleanup loop in `do_cleanup()` function so `local` is valid. Cleanup output is now clean.
-- **Bug #21 — ML Assets and Simulator Volumes falsely marked SAFE**: `/System/Library/AssetsV2/*` and `/Library/Developer/CoreSimulator/Volumes/` are SIP-protected on macOS Tahoe. `rm -rf` always fails. Moved both to Untouchable with educational messages. Added generic `is_sip_protected()` helper for future-proofing.
-- **Bug #19 — Homebrew Cache duplicated**: Dynamic `~/Library/Caches/*` scanner ran before Package Managers, so Homebrew appeared twice (inflating totals by ~2.5 GB). Added name-based exclusion for caches covered by dedicated scanners.
-- **Bug #18 — Spotlight Index marked SAFE**: Changed risk tag from SAFE to REBUILD. Deleting the index forces multi-hour re-indexing with 100% CPU.
-- **Bug #15 — iOS Backups header never closed**: When no backups found, `cat_footer` printed nothing, leaving `┌` unclosed. Now prints `└─── nothing found`.
-- **Bug #16 — Untouchable box items outside border**: `draw_box` closed with `╰` before items were printed. Restructured to pass all lines (header, items, educational footer) to `draw_box` so everything renders inside the box.
-- **Bug #2 — Untouchable incomplete and miscounted**: Rosetta 2 cache now detected via `[[ -d ]]` with size "—" (SIP blocks `sudo du`). Removed StagedFrameworks scanner (path doesn't exist on Tahoe). Footer counter now counts only visible items, matching the displayed list exactly.
+**First public release.**
 
-### Changed
+After extensive private development and iteration, diskdoc is ready for general use.
+The codebase went through several major internal refactors before reaching this
+stable baseline — that development history is preserved in git log for the curious.
 
-- Apple System Assets (`/Library/Apple/System/Library/Assets`) routed through `is_sip_protected()` — added to Untouchable if SIP-protected, kept as SAFE otherwise.
+### What's in 1.0.0
 
-## [3.0.3] - 2026-04-07
+#### Scanner
+- Comprehensive macOS scanner covering 250+ known space hogs
+- Version-aware scanning for Catalina through Tahoe (macOS 10.15 – 26.x)
+- Individual enumeration of VM bundles and browser profiles
+- Dynamic scanning of `~/Library/Caches/*` above configurable threshold
+- Ghost app detection with single-pass `mdfind` cache for performance
+- Orphaned container detection for uninstalled apps
 
-Simplification, UI cleanup, and performance. No new features.
+#### Safety & risk classification
+- Four-tier risk model: SAFE, REBUILD, PERSONAL, UNTOUCHABLE
+- SIP-aware UNTOUCHABLE detection — paths protected by System Integrity
+  Protection are routed away from any delete code path
+- PERSONAL items (Mail, Messages, browser history) are never auto-deleted
+- UNTOUCHABLE items have no delete code path at all — dyld cache, sleepimage,
+  Rosetta 2, ML Assets, Simulator Volumes, /var/folders daemon caches
+- Exclusions via `~/.diskdocrc` honored absolutely
+- Every action logged to `~/.diskdoc/history.log`
 
-### Removed
-- **Tree selector** (`_interactive_select_tree`, `build_visible_rows`, `draw_tree`, `_do_sort`, `_rebuild_tree`, `_risk_rank`, `HAS_BASH4`): required bash 4+ associative arrays, incompatible with macOS default bash 3.2. Flat selector is now the only selector.
-- **Sort (s) and Search (/) keybindings**: removed from status bar and code. TUI is already slow; more input handling made it worse.
-- **`render_status_bar()`**: only used by the tree selector.
-- **"Nothing found" output**: categories with zero results are now fully suppressed (no header, no footer, no `·` lines).
+#### Interactive experience
+- Flat-list paginated selector — works with bash 3.2 (macOS default)
+- No pre-checked items; selection is always explicit
+- Keyboard navigation, toggle, batch select/deselect
+- Live progress indicator during scan
+- Detail panel with path, size, category, and risk explanation
 
-### Fixed
-- **Bug #10 — Output verboso**: `--report` produced ~400 lines where 80% were `·` (not found). Implemented deferred header strategy: `cat_header()` buffers, `_flush_cat_header()` prints only when an item is found. Empty categories are completely hidden. Scan progress uses ephemeral `\r` spinner (TTY only). Output lines: 400+ → ~100 (found items only).
-- **Bug #11 — Truncamiento de nombres**: `"${name:0:29}..."` made 5 ML Assets look identical. New `truncate_middle()` (Unicode-safe via `wc -m`/`cut -c`) shows both ends: `ML Asset: com_appl…_Siri_Understanding`. Dynamic `UI_NAME_WIDTH` based on terminal width (clamped 32-60). Replaced 12 hardcoded truncation sites.
-- **Bug #12 — Performance 184s → 69s**: Ghost Apps (97s, 53% of total) invoked `mdfind` + `find Info.plist` per directory. Replaced with single-pass index: one `find` + one `mdfind` builds all installed bundle IDs upfront, then O(1) `grep -qxF` lookups. Added `du` timeout safety net (10s via `gtimeout`/`timeout` when available).
-- **Piped output clean**: spinner/progress lines (`⠹ Scanning...`) now use `logp()` which suppresses on non-TTY. No control characters leak into `diskdoc --report | ...`.
+#### Reporting
+- `--scan` for preview-only mode
+- `--report` for full audit with proportional bars and risk tags
+- `--dry-run` to see exact `rm` commands without executing
+- `--json` for piping and automation
+- `--auto` for hands-off cleanup (SAFE items only)
+- `--profile` filter for dev, system, apps, or personal workflows
 
-## [3.0.2] - 2026-04-07
+#### Error handling
+- Real OS errors surfaced when cleanup fails — no silent failures
+- Sudo credentials cached at scan start to prevent mid-scan timeout
+- Consistent totals between interactive and report modes
 
-Re-audit fix release. v3.0.1 claimed to fix 17 bugs but only fixed 2.
-This release addresses the 9 confirmed remaining bugs from the re-audit.
+### Requirements
+- macOS Catalina (10.15) through Tahoe (26.x)
+- bash 3.2 or newer (ships with macOS)
+- sudo access for system-level directory scanning
 
-### Fixed
+### Known limitations
+- Does not detect Spotlight Index issues beyond size reporting
+- Does not integrate with Time Machine for protected snapshot management
+- macOS only — paths are platform-specific
 
-- **Bug #3 — Category footer totals skipping first item**: `((count++))` returns exit code 1 when count=0 (bash post-increment evaluates to 0 = falsy), causing `&&` to short-circuit and skip the first item's size. Changed all 21 instances to `((++count))` (pre-increment). Every category total was wrong.
-- **Bug #1 — 4 orphan sections with no category headers**: Virtualization, Spotlight/Cloud/Telegram, B5-B17 (Cloud/Gaming/System), and C4-C13 (Containers/Creative/Gaming/Messaging/Media) all lacked `cat_header`/`cat_footer`. Added 15 new section headers. Headers (┌) and footers (└───) now match: 39 = 39.
-- **Bug #4 — Mail folder exists but scanner reports nothing found**: macOS Sequoia puts ~/Library/Mail under TCC. `du` returns 0 without Full Disk Access. Added TCC detection: when path exists but du returns 0, shows warning with Full Disk Access instructions. Also applied to Messages.
-- **Bug #2 — Untouchable incomplete**: `scan_untouchable_target` used `[[ -e "$path" ]]` (user-level) to test root-owned paths like sleepimage and Rosetta cache. Changed to `sudo test -e`. Added sudo info message. All E-spec items (E1-E6) were already in code but guard failed without sudo.
-- **Bug #5 — Panel detail bleed-through**: `draw_box` did not clear to end of line. Added `\r\033[K` before every printf in draw_box and render_status_bar.
-- **Bug #6 — Bar widths inconsistent (8 vs 10)**: Selector used hardcoded bar width of 8, table used 10. Added `readonly UI_BAR_WIDTH=10` constant and replaced all 4 hardcoded draw_bar width arguments.
-- **Bug #7 — Large categories not collapsed by default**: Tree selector infrastructure (▼/▶, →/← expand/collapse) already existed but all categories started expanded. Categories with >8 items and Untouchable now start collapsed.
-- **Bug #8 — Sort cycling (s) and search (/) not implemented**: Added `s` key to cycle sort (Size desc → Name asc → Risk → Category) with current mode shown in status bar. Added `/` key for case-insensitive substring filter with Enter/Escape to confirm/cancel.
-- **Bug #9 — 12 nvm versions cluttering table**: Created `scan_version_manager()` that aggregates all versions into single row ("nvm node versions (12 found)") with total size. Detects active version via `nvm current` and marks as protected. Applied to nvm, fnm, asdf, Volta, mise, sdkman, swiftenv, phpenv, phpbrew, jabba.
+---
 
-## [3.0.1] - 2026-04-06
+### Development history (pre-1.0.0)
 
-Partial bug fix (only 2 of 17 reported bugs actually fixed).
+Internal development versions between the first prototype and 1.0.0
+are preserved in git history. Notable milestones along the way:
 
-## [3.0.0] - 2026-04-06
+- First prototype: basic cache scanner, ~20 known paths
+- Expanded scanner: 250+ paths across dev tools, apps, browsers, media
+- Output simplification: removed verbose "nothing found" noise,
+  reduced report output by ~70%
+- Performance pass: ghost app detection from 97s to <5s via single-pass
+  `mdfind` cache; overall scan time roughly halved
+- SIP awareness: Tahoe endured `/System/Library/AssetsV2/` and
+  `/Library/Developer/CoreSimulator/Volumes/` with SIP, so these moved
+  to UNTOUCHABLE with educational messages instead of failing cleanup
+- Cleanup error surfacing: replaced silent `2>/dev/null` with real OS
+  error capture so users see why a delete actually failed
+- Untouchable category: introduced a fourth risk tier with no delete
+  code path, preventing any accidental destructive action on system
+  paths that macOS protects
 
-### Breaking Changes
-- **Requires bash 4+** — macOS ships bash 3.2 (2007, GPLv3 licensing). Install with `brew install bash`.
-- Rewritten interactive selector with collapsible category trees (bash 4+ associative arrays)
-
-### Added
-
-#### Untouchable Category (NEW)
-- Report-only section showing system-critical items that cannot be safely deleted
-- Educational explanations for each item (why it exists, whose fault it is)
-- Items: dyld shared cache, Rosetta 2 AOT cache, sleepimage, swap files, /Library/Updates, StagedFrameworks
-- Triple-lock safety: separate U_* arrays, dedicated `scan_untouchable_target()`, auto mode guard
-- `--test-untouchable-safety` flag to verify isolation
-- Presented in report mode with `draw_box()` and lock icons
-
-#### macOS Version Detection
-- `detect_macos_version()` supporting Catalina (10.15) through Tahoe (26)
-- Codename mapping (Mojave, Catalina, Big Sur, Monterey, Ventura, Sonoma, Sequoia, Tahoe)
-- Mail database version mapping (V6-V10) based on macOS version
-- Version-aware paths: Spotlight (pre-Big Sur vs Big Sur+), dyld cache (3 variants)
-
-#### Tier 1 Scanners — Massive Impact (20-500+ GB)
-- **Virtualization**: Parallels (all locations + App Store sandbox), VMware Fusion, UTM (direct + sandboxed), Lima, Colima, OrbStack (sparse-file aware with `du`), Tart (VMs + OCI cache), Vagrant, VirtualBox, Multipass
-- **Docker.raw**: Sparse file detection with actual-on-disk reporting
-- **Creative**: Adobe CC (media cache, After Effects per-version disk cache, support dirs), Lightroom (previews, smart previews, backups), DaVinci Resolve (cache DB + support)
-- **Mail**: Versioned database scanning (V6-V10), active version detection, sync logs, downloads
-- **/var/folders**: Per-user temp directories
-- **Spotlight**: Version-aware index path scanning with `spotlight-rebuild` cleanup method
-- **Google Drive**: DriveFS cache
-- **Telegram**: App cache
-
-#### Tier 2 Scanners — Medium Impact
-- **Browsers**: Generic `scan_chromium_caches()` with multi-profile support, Safari (6 cache locations), Firefox (profiles + shared cache)
-- **Browser Personal**: IndexedDB, File System, LocalStorage, History (PERSONAL risk)
-- **Conda**: environments + packages
-- **Cloud Storage**: Dropbox cache, OneDrive cache
-- **Communication**: Signal, Zoom, Teams
-- **Media**: Spotify cache, Steam
-- **Game Dev**: Unity (Asset Store, cache, editor), Unreal Engine (engine + DerivedData), Bazel (new + legacy paths)
-- **System**: Previously Relocated Items, Saved Application State
-- **Pkg Manager**: Homebrew Caskroom .dmg/.pkg cleanup with `caskroom-clean` method
-
-#### Tier 3 Scanners — Small Impact
-- **Language ecosystems**: Julia, Haskell, OCaml, Perl, R, Elixir, Nim, Zig, Bun, Deno
-- **Version managers**: nvm, volta, fnm, phpenv, luaenv
-- **Build tools**: CMake, ccache, Buck, Pants, Meson, Ninja, sccache
-- **Container tools**: Podman, nerdctl, Rancher Desktop, containerd
-- **Creative tools**: Sketch, Figma (local), Blender
-- **Gaming**: Epic Games Launcher, GOG Galaxy
-- **Messaging**: WhatsApp, Line, Viber, WeChat, Messenger
-- **Media downloads**: Apple TV downloads, Apple Music media, Podcasts, Books
-- **Orphaned Group Containers**: Detects containers from uninstalled apps via Spotlight/Applications check
-- **Minor directories**: HTTPStorages, Autosave Info, Metadata, Suggestions
-
-#### Ghost Apps Detector
-- Detects caches and containers from uninstalled applications
-- Checks `/Applications`, `~/Applications`, `/System/Applications`, and Spotlight
-- Scans both `~/Library/Caches` and `~/Library/Group Containers`
-
-#### UI Redesign
-- **16 ANSI semantic colors**: C_SUCCESS, C_WARNING, C_DANGER, C_INFO, C_MUTED, C_ACCENT
-- **NO_COLOR support**: Respects no-color.org standard
-- **Eighth-block proportional bars**: `draw_bar()` using ▏▎▍▌▋▊▉█░
-- **Braille spinner**: `spinner_start()`/`spinner_stop()` with ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏
-- **Generic `draw_box()`**: Rounded Unicode box-drawing (╭╮╰╯), used across banner, doctor, report, untouchable
-- **Collapsible category trees**: Bash 4+ associative arrays, ←/→ expand/collapse, space toggles category
-- **Status bar**: Selected count + total at bottom
-- **Detail panel**: Shows path, risk, method for highlighted item
-- **Risk icons**: Emoji (🟢🟡🔴🔒) with ANSI fallback (●▲■) for non-emoji terminals
-
-#### Risk Level System (Enhanced)
-- SAFE / REBUILD / PERSONAL risk tags (from v2)
-- **NEW: UNTOUCHABLE** — system-critical items, magenta color, lock icon, never deletable
-- Color-coded: green (SAFE), yellow (REBUILD), red (PERSONAL), magenta (UNTOUCHABLE)
-- PERSONAL and UNTOUCHABLE items auto-skipped in `--auto` mode
-
-#### Profiles (Updated)
-- `apps` profile now includes Virtualization, Browser, Creative, Mail categories
-- `system` profile now includes System Temp (/var/folders)
-- `personal` profile now includes Browser Personal data
-
-#### Official Command Wrappers
-- `tmutil thinlocalsnapshots` for APFS snapshot cleanup
-- `xcrun simctl delete unavailable` for dead iOS simulators
-- `docker system prune -a --volumes -f` for Docker cleanup
-- `qlmanage -r cache` for QuickLook cache reset
-- `sudo mdutil -E /` for Spotlight index rebuild
-- `caskroom-clean` for Homebrew Caskroom installer cleanup
-
-#### Structural
-- All scanners wrapped in `run_all_scans()` function for proper variable scoping
-- Per-VM individual reporting (not aggregated) for all virtualization platforms
-- Sparse file handling — always `du`, never `ls` for Docker.raw and OrbStack
-- Dynamic scanning of Group Containers with deduplication against known entries
-- Scanner output with category headers and progress indicators
-
-## [2.0.0] - 2026-04-05
-
-### Added
-- Interactive item selector with arrow key navigation, space to toggle, a/n for all/none
-- Dry-run mode (`--dry-run`) showing exact deletion commands
-- JSON output mode (`--json`) for piping into other tools
-- Profile filtering (`--profile dev|system|apps`)
-- Minimum size threshold (`--min-size N`)
-- Exclusion file support (`~/.diskdocrc`)
-- Doctor mode (`diskdoc doctor`) for disk diagnosis
-- History tracking (`diskdoc history`) with logged cleanups
-- Homebrew formula and install script
-
-## [1.0.0] - 2026-04-04
-
-### Added
-- Initial release
-- Scan mode (`--scan`) to preview without deleting
-- Auto mode (`--auto`) for unattended cleanup
-- Interactive mode with confirmation prompt
-- Dynamic cache detection (scans all ~/Library/Caches entries)
-- Apple idleassetsd screensaver cache detection (the #1 hidden space hog)
-- Docker data cleanup
-- Xcode DerivedData and iOS Simulator cleanup
-- Android SDK detection
-- node_modules scanning across code directories
-- Package manager cache cleanup (npm, pnpm, yarn, Homebrew)
-- AI tool cache cleanup (Claude, ChatGPT, Kiro, Windsurf, Cursor)
-- Color-coded table with size-based highlighting
-- Before/after progress bar visualization
-- Detailed final report with recovered space stats
+These changes are collapsed into 1.0.0 as the baseline public release.

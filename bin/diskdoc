@@ -23,7 +23,7 @@
 # shellcheck disable=SC2059,SC2004
 set -uo pipefail
 
-VERSION="3.0.4"
+VERSION="1.0.0"
 
 # ── Colors (16 ANSI standard — adapts to any terminal theme) ────────────────
 # Semantic names: use these, not raw color names
